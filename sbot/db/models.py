@@ -94,6 +94,51 @@ class Panel(Base):
         onupdate=func.current_timestamp(),
     )
 
+    panel_nodes: Mapped[list["PanelNode"]] = relationship(
+        back_populates="panel",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class PanelNode(Base):
+    """面板 v2node 节点的本地缓存。
+
+    v2board 端的 type 字段恒为 'v2node';协议差异落在 protocol 字段上。
+    raw_json 保留完整原始 dict,详情页用来解析嵌套字段(tls_settings 等)。
+    """
+
+    __tablename__ = "panel_nodes"
+    __table_args__ = (
+        UniqueConstraint("panel_id", "node_id", name="uq_panel_node"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    panel_id: Mapped[int] = mapped_column(
+        ForeignKey("panels.id", ondelete="CASCADE"), nullable=False
+    )
+    node_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    protocol: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    host: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    port: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    server_port: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    network: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tls: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rate: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sort: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    show: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    available_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    synced_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+    )
+
+    panel: Mapped[Panel] = relationship(back_populates="panel_nodes")
+
 
 class OperationLog(Base):
     __tablename__ = "operation_logs"

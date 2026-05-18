@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import (
 
 from datetime import datetime
 
-from .models import Base, Node, OperationLog, Panel, Server
+from .models import Base, Node, OperationLog, Panel, PanelNode, Server
 
 
 _engine = None
@@ -234,6 +234,76 @@ async def delete_panel(s: AsyncSession, panel_id: int) -> None:
     panel = await s.get(Panel, panel_id)
     if panel is not None:
         await s.delete(panel)
+
+
+# ---------- panel nodes ----------
+
+async def list_panel_nodes(s: AsyncSession, panel_id: int) -> list[PanelNode]:
+    result = await s.execute(
+        select(PanelNode)
+        .where(PanelNode.panel_id == panel_id)
+        .order_by(PanelNode.sort.asc().nulls_last(), PanelNode.node_id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_panel_node(
+    s: AsyncSession, panel_id: int, node_id: int
+) -> Optional[PanelNode]:
+    result = await s.execute(
+        select(PanelNode).where(
+            PanelNode.panel_id == panel_id,
+            PanelNode.node_id == node_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def replace_panel_nodes(
+    s: AsyncSession,
+    panel_id: int,
+    items: Iterable[dict],
+) -> int:
+    """以远程为准覆盖该面板的节点缓存,返回最终节点数量。"""
+    await s.execute(delete(PanelNode).where(PanelNode.panel_id == panel_id))
+    count = 0
+    now = datetime.utcnow()
+    for item in items:
+        payload = dict(item)
+        payload.setdefault("synced_at", now)
+        s.add(PanelNode(panel_id=panel_id, **payload))
+        count += 1
+    await s.flush()
+    return count
+
+
+async def update_panel_node_show(
+    s: AsyncSession, panel_id: int, node_id: int, show: bool
+) -> None:
+    node = await get_panel_node(s, panel_id, node_id)
+    if node is not None:
+        node.show = show
+
+
+async def delete_panel_node(
+    s: AsyncSession, panel_id: int, node_id: int
+) -> None:
+    node = await get_panel_node(s, panel_id, node_id)
+    if node is not None:
+        await s.delete(node)
+
+
+async def latest_node_sync_at(
+    s: AsyncSession, panel_id: int
+) -> Optional[datetime]:
+    """最近一次成功同步的时间,空表返回 None。"""
+    result = await s.execute(
+        select(PanelNode.synced_at)
+        .where(PanelNode.panel_id == panel_id)
+        .order_by(PanelNode.synced_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 # ---------- operation logs ----------

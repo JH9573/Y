@@ -17,6 +17,7 @@ from .common import (
     CB_DEL_PANEL_OK,
     CB_PANEL_NODES,
     CB_PANEL_PREFIX,
+    humanize_age,
 )
 
 
@@ -76,9 +77,11 @@ async def _render_panel_menu(
     query = update.callback_query
     async with crud.session() as s:
         panel = await crud.get_panel(s, panel_id)
-    if panel is None:
-        await query.edit_message_text("面板不存在(可能已被删除)。")
-        return
+        if panel is None:
+            await query.edit_message_text("面板不存在(可能已被删除)。")
+            return
+        nodes = await crud.list_panel_nodes(s, panel_id)
+        latest_sync = await crud.latest_node_sync_at(s, panel_id)
 
     auth_state = "已登录" if panel.auth_data else "未登录"
     header = (
@@ -86,7 +89,9 @@ async def _render_panel_menu(
         f"地址: {panel.base_url}\n"
         f"后台路径: {panel.secure_path}\n"
         f"管理员: {panel.email}\n"
-        f"状态: {auth_state}"
+        f"状态: {auth_state}\n"
+        f"已缓存 v2node: {len(nodes)} 个\n"
+        f"最近同步: {humanize_age(latest_sync)}"
     )
 
     kb = [

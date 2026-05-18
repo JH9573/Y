@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -53,6 +54,46 @@ def validate_email(value: str) -> str:
     if not _EMAIL_PATTERN.match(value):
         raise V2BoardAPIError("邮箱格式不正确")
     return value
+
+
+# ---------- 节点数据映射 ----------
+
+def _opt_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return int(value) if isinstance(value, bool) else None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def v2node_to_db_row(node: dict[str, Any]) -> dict[str, Any]:
+    """把 v2board getNodes 返回的单个节点 dict 映射成 PanelNode 字段。
+
+    raw_json 保留完整原始 dict 供详情页解析嵌套字段。
+    """
+    parent = node.get("parent_id")
+    parent_id = _opt_int(parent) if parent not in (None, 0, "0", "") else None
+
+    rate = node.get("rate")
+    rate_str = str(rate) if rate is not None else None
+
+    return {
+        "node_id": int(node["id"]),
+        "name": str(node.get("name") or ""),
+        "protocol": str(node.get("protocol") or ""),
+        "host": str(node.get("host") or ""),
+        "port": _opt_int(node.get("port")) or 0,
+        "server_port": _opt_int(node.get("server_port")) or 0,
+        "network": str(node["network"]) if node.get("network") else None,
+        "tls": _opt_int(node.get("tls")),
+        "rate": rate_str,
+        "sort": _opt_int(node.get("sort")),
+        "show": bool(node.get("show")),
+        "parent_id": parent_id,
+        "available_status": _opt_int(node.get("available_status")),
+        "raw_json": json.dumps(node, ensure_ascii=False, default=str),
+    }
 
 
 # ---------- 客户端 ----------

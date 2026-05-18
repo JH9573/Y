@@ -1,9 +1,12 @@
-"""面板 v2node 节点列表 / 详情 / 上下架 / 删除。
+"""面板 v2node 节点列表 / 详情 / 上下架 / 删除 / 同步。
 
-添加节点放在后续步骤里实现。
+列表与详情从本地 panel_nodes 表读取(添加面板时已初始化拉取);
+上下架 / 删除调远端 API,成功后乐观更新本地缓存;
+列表底部的「🔄 同步」按钮可手动从面板覆盖整张缓存表。
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -11,15 +14,18 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from ..db import crud
-from ..services.v2board_api import V2BoardAPIError
+from ..db.models import PanelNode
+from ..services.v2board_api import V2BoardAPIError, v2node_to_db_row
 from .common import (
     CB_PANEL_NODE,
     CB_PANEL_NODE_DROP,
     CB_PANEL_NODE_DROP_OK,
     CB_PANEL_NODE_SHOW,
+    CB_PANEL_NODE_SYNC,
     CB_PANEL_NODES,
     CB_PANEL_PREFIX,
     get_ctx,
+    humanize_age,
     truncate,
 )
 
@@ -29,7 +35,17 @@ log = logging.getLogger(__name__)
 # 防止 inline 按钮过多;v2board 一般不会超过这个量级
 NODE_LIST_LIMIT = 50
 
+# v2board ServerService::mergeData 里的 available_status 取值
 AVAILABLE_STATUS_TEXT = {0: "离线", 1: "异常", 2: "正常"}
+HEALTH_EMOJI = {0: "🔴", 1: "🟡", 2: "🟢"}
+
+
+def _health_emoji(status: int | None) -> str:
+    return HEALTH_EMOJI.get(status, "⚪")
+
+
+def _health_text(status: int | None) -> str:
+    return AVAILABLE_STATUS_TEXT.get(status, "未知")
 
 
 # ---------- 列表 ----------
@@ -42,67 +58,66 @@ async def cb_list_nodes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def _render_node_list(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, panel_id: int
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    panel_id: int,
+    *,
+    banner: str | None = None,
 ) -> None:
     query = update.callback_query
-    ctx = get_ctx(context)
     async with crud.session() as s:
         panel = await crud.get_panel(s, panel_id)
-    if panel is None:
-        await query.edit_message_text("面板不存在。")
-        return
+        if panel is None:
+            await query.edit_message_text("面板不存在。")
+            return
+        nodes = await crud.list_panel_nodes(s, panel_id)
+        latest_sync = await crud.latest_node_sync_at(s, panel_id)
 
-    await query.edit_message_text(f"正在从面板「{panel.name}」拉取 v2node 节点…")
-    try:
-        nodes = await ctx.v2board.get_v2nodes(panel)
-    except V2BoardAPIError as exc:
-        back = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(
-                "⬅ 返回", callback_data=f"{CB_PANEL_PREFIX}{panel_id}"
-            )]]
-        )
-        await query.edit_message_text(f"❌ 拉取失败:{exc}", reply_markup=back)
-        return
-
-    nodes.sort(key=lambda n: (n.get("sort") or 0, n.get("id") or 0))
+    header_lines: list[str] = []
+    if banner:
+        header_lines.append(banner)
+        header_lines.append("")
+    header_lines.append(f"面板「{panel.name}」的 v2node 节点(共 {len(nodes)} 个)")
+    header_lines.append(f"最近同步: {humanize_age(latest_sync)}")
 
     if not nodes:
         kb = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton(
-                    "🔄 刷新", callback_data=f"{CB_PANEL_NODES}{panel_id}"
+                    "🔄 同步", callback_data=f"{CB_PANEL_NODE_SYNC}{panel_id}"
                 )],
                 [InlineKeyboardButton(
                     "⬅ 返回", callback_data=f"{CB_PANEL_PREFIX}{panel_id}"
                 )],
             ]
         )
-        await query.edit_message_text(
-            f"面板「{panel.name}」暂无 v2node 节点。", reply_markup=kb
-        )
+        header_lines.append("")
+        header_lines.append("(暂无节点) 点「🔄 同步」从面板拉取。")
+        await query.edit_message_text("\n".join(header_lines), reply_markup=kb)
         return
 
-    lines = [f"面板「{panel.name}」的 v2node 节点(共 {len(nodes)} 个):"]
+    header_lines.append("")
+    header_lines.append("图例: 🟢正常 🟡异常 🔴离线 ⚪未知 / ✅上架 ❌下架 / 🔁中转")
+
     rows: list[list[InlineKeyboardButton]] = []
     for n in nodes[:NODE_LIST_LIMIT]:
-        nid = n.get("id")
-        name = n.get("name") or "(未命名)"
-        proto = n.get("protocol") or "?"
-        show_mark = "✅" if n.get("show") else "❌"
-        lines.append(f"#{nid} {name} [{proto}] {show_mark}")
+        health = _health_emoji(n.available_status)
+        show_mark = "✅" if n.show else "❌"
+        relay = "🔁" if n.parent_id else ""
+        label = f"{health}{show_mark}{relay} #{n.node_id} {n.name}"
         rows.append(
             [InlineKeyboardButton(
-                f"{show_mark} #{nid} {name}",
-                callback_data=f"{CB_PANEL_NODE}{panel_id}:{nid}",
+                label,
+                callback_data=f"{CB_PANEL_NODE}{panel_id}:{n.node_id}",
             )]
         )
     if len(nodes) > NODE_LIST_LIMIT:
-        lines.append(f"\n…仅显示前 {NODE_LIST_LIMIT} 个,共 {len(nodes)} 个")
+        header_lines.append(f"…仅显示前 {NODE_LIST_LIMIT} 个,共 {len(nodes)}")
 
     rows.append(
         [
             InlineKeyboardButton(
-                "🔄 刷新", callback_data=f"{CB_PANEL_NODES}{panel_id}"
+                "🔄 同步", callback_data=f"{CB_PANEL_NODE_SYNC}{panel_id}"
             ),
             InlineKeyboardButton(
                 "⬅ 返回", callback_data=f"{CB_PANEL_PREFIX}{panel_id}"
@@ -110,7 +125,8 @@ async def _render_node_list(
         ]
     )
     await query.edit_message_text(
-        truncate("\n".join(lines)), reply_markup=InlineKeyboardMarkup(rows)
+        truncate("\n".join(header_lines)),
+        reply_markup=InlineKeyboardMarkup(rows),
     )
 
 
@@ -135,40 +151,32 @@ async def _render_node_detail(
     banner: str | None = None,
 ) -> None:
     query = update.callback_query
-    ctx = get_ctx(context)
     async with crud.session() as s:
         panel = await crud.get_panel(s, panel_id)
-    if panel is None:
-        await query.edit_message_text("面板不存在。")
-        return
-
-    back_to_list = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(
-            "⬅ 返回列表", callback_data=f"{CB_PANEL_NODES}{panel_id}"
-        )]]
-    )
-
-    try:
-        nodes = await ctx.v2board.get_v2nodes(panel)
-        groups = await ctx.v2board.get_groups(panel)
-    except V2BoardAPIError as exc:
-        await query.edit_message_text(
-            f"❌ 拉取失败:{exc}", reply_markup=back_to_list
+        if panel is None:
+            await query.edit_message_text("面板不存在。")
+            return
+        node = await crud.get_panel_node(s, panel_id, node_id)
+        if node is None:
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton(
+                    "⬅ 返回列表", callback_data=f"{CB_PANEL_NODES}{panel_id}"
+                )]]
+            )
+            await query.edit_message_text(
+                "节点不存在或已被删除。", reply_markup=kb
+            )
+            return
+        parent = (
+            await crud.get_panel_node(s, panel_id, node.parent_id)
+            if node.parent_id else None
         )
-        return
 
-    node = next((n for n in nodes if n.get("id") == node_id), None)
-    if node is None:
-        await query.edit_message_text(
-            "节点不存在或已被删除。", reply_markup=back_to_list
-        )
-        return
-
-    text = _format_node(node, _group_name_map(groups))
+    text = _format_node(node, parent)
     if banner:
         text = f"{banner}\n\n{text}"
 
-    is_show = bool(node.get("show"))
+    is_show = bool(node.show)
     show_label = "🔻 下架" if is_show else "🔺 上架"
     new_show = 0 if is_show else 1
     rows = [
@@ -184,10 +192,6 @@ async def _render_node_detail(
         ],
         [
             InlineKeyboardButton(
-                "🔄 刷新",
-                callback_data=f"{CB_PANEL_NODE}{panel_id}:{node_id}",
-            ),
-            InlineKeyboardButton(
                 "⬅ 返回列表",
                 callback_data=f"{CB_PANEL_NODES}{panel_id}",
             ),
@@ -198,48 +202,44 @@ async def _render_node_detail(
     )
 
 
-def _group_name_map(groups: list[dict[str, Any]]) -> dict[int, str]:
-    """{group_id: name} 字典,用于解析节点的 group_id。"""
-    result: dict[int, str] = {}
-    for g in groups:
-        gid = g.get("id")
+def _format_node(node: PanelNode, parent: PanelNode | None) -> str:
+    relay_suffix = "(中转节点)" if node.parent_id else ""
+    health = _health_emoji(node.available_status)
+
+    raw: dict[str, Any] = {}
+    if node.raw_json:
         try:
-            gid_int = int(gid)
-        except (TypeError, ValueError):
-            continue
-        result[gid_int] = str(g.get("name") or f"#{gid_int}")
-    return result
+            parsed = json.loads(node.raw_json)
+            if isinstance(parsed, dict):
+                raw = parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
 
-
-def _format_node(node: dict[str, Any], group_names: dict[int, str]) -> str:
-    nid = node.get("id")
     lines = [
-        f"v2node #{nid}: {node.get('name', '')}",
+        f"v2node #{node.node_id}: {node.name} {relay_suffix}".rstrip(),
         "",
-        f"协议: {node.get('protocol', '?')}",
-        f"地址: {node.get('host', '')}",
-        f"连接端口: {node.get('port', '')}",
-        f"后端端口: {node.get('server_port', '')}",
-        f"传输: {node.get('network', '')}",
-        f"TLS: {node.get('tls', '')}",
-        f"倍率: {node.get('rate', '')}",
-        f"排序: {node.get('sort', '')}",
-        f"状态: {'已上架' if node.get('show') else '已下架'}",
+        f"协议: {node.protocol or '?'}",
+        f"地址: {node.host}",
+        f"连接端口: {node.port}",
+        f"后端端口: {node.server_port}",
+        f"传输: {node.network or '-'}",
+        f"TLS: {node.tls if node.tls is not None else '-'}",
+        f"倍率: {node.rate if node.rate is not None else '-'}",
+        f"排序: {node.sort if node.sort is not None else '-'}",
+        f"状态: {'已上架' if node.show else '已下架'}",
+        f"健康: {health} {_health_text(node.available_status)}",
     ]
 
-    gids = node.get("group_id")
-    if isinstance(gids, list) and gids:
-        names = []
-        for gid in gids:
-            try:
-                gid_int = int(gid)
-            except (TypeError, ValueError):
-                continue
-            names.append(group_names.get(gid_int, f"#{gid_int}"))
-        if names:
-            lines.append(f"权限组: {', '.join(names)}")
+    if node.parent_id:
+        if parent is not None:
+            lines.append(f"父节点: #{node.parent_id} ({parent.name})")
+        else:
+            lines.append(f"父节点: #{node.parent_id} (本地无缓存)")
 
-    tags = node.get("tags")
+    group_id = raw.get("group_id")
+    if isinstance(group_id, list) and group_id:
+        lines.append(f"权限组: {', '.join(str(g) for g in group_id)}")
+    tags = raw.get("tags")
     if isinstance(tags, list) and tags:
         lines.append(f"标签: {', '.join(str(t) for t in tags)}")
 
@@ -249,21 +249,19 @@ def _format_node(node: dict[str, Any], group_names: dict[int, str]) -> str:
         ("encryption", "Encryption"),
         ("obfs", "Obfs"),
     ):
-        v = node.get(key)
+        v = raw.get(key)
         if v:
             lines.append(f"{label}: {v}")
 
     advanced = [
         k for k in ("tls_settings", "network_settings", "encryption_settings")
-        if node.get(k)
+        if raw.get(k)
     ]
     if advanced:
         lines.append(f"高级配置: {', '.join(advanced)}")
 
-    avail = node.get("available_status")
-    if avail is not None:
-        lines.append(f"健康: {AVAILABLE_STATUS_TEXT.get(avail, str(avail))}")
-
+    lines.append("")
+    lines.append(f"快照: {humanize_age(node.synced_at)}")
     return "\n".join(lines)
 
 
@@ -294,6 +292,10 @@ async def cb_node_show_toggle(
         ok, msg = False, str(exc)
 
     async with crud.session() as s:
+        if ok:
+            await crud.update_panel_node_show(
+                s, panel_id, node_id, bool(show)
+            )
         await crud.add_log(
             s,
             user_id=update.effective_user.id,
@@ -327,8 +329,9 @@ async def cb_node_drop_confirm(
 
     async with crud.session() as s:
         panel = await crud.get_panel(s, panel_id)
-    if panel is None:
-        await query.edit_message_text("面板不存在。")
+        node = await crud.get_panel_node(s, panel_id, node_id)
+    if panel is None or node is None:
+        await query.edit_message_text("面板或节点不存在。")
         return
 
     kb = InlineKeyboardMarkup(
@@ -346,7 +349,7 @@ async def cb_node_drop_confirm(
         ]
     )
     await query.edit_message_text(
-        f"⚠️ 确认从面板「{panel.name}」删除 v2node #{node_id}?\n"
+        f"⚠️ 确认从面板「{panel.name}」删除 v2node #{node_id}「{node.name}」?\n"
         "该操作不可撤销。",
         reply_markup=kb,
     )
@@ -376,6 +379,8 @@ async def cb_node_drop_do(
         ok, msg = False, str(exc)
 
     async with crud.session() as s:
+        if ok:
+            await crud.delete_panel_node(s, panel_id, node_id)
         await crud.add_log(
             s,
             user_id=update.effective_user.id,
@@ -387,12 +392,74 @@ async def cb_node_drop_do(
         await s.commit()
 
     prefix = "✅" if ok else "❌"
-    kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(
-            "⬅ 返回列表", callback_data=f"{CB_PANEL_NODES}{panel_id}"
-        )]]
+    if ok:
+        await _render_node_list(
+            update, context, panel_id, banner=f"{prefix} {msg}"
+        )
+    else:
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(
+                "⬅ 返回列表",
+                callback_data=f"{CB_PANEL_NODES}{panel_id}",
+            )]]
+        )
+        await query.edit_message_text(f"{prefix} {msg}", reply_markup=kb)
+
+
+# ---------- 同步 ----------
+
+async def cb_sync_nodes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    panel_id = int(query.data.split(":", 1)[1])
+    ctx = get_ctx(context)
+
+    async with crud.session() as s:
+        panel = await crud.get_panel(s, panel_id)
+    if panel is None:
+        await query.edit_message_text("面板不存在。")
+        return
+
+    await query.edit_message_text(f"正在从「{panel.name}」同步 v2node 节点…")
+    try:
+        nodes = await ctx.v2board.get_v2nodes(panel)
+    except V2BoardAPIError as exc:
+        async with crud.session() as s:
+            await crud.add_log(
+                s,
+                user_id=update.effective_user.id,
+                server_id=None,
+                action="panel.node.sync",
+                result="failed",
+                detail=f"panel_id={panel_id}: {exc}",
+            )
+            await s.commit()
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(
+                "⬅ 返回", callback_data=f"{CB_PANEL_PREFIX}{panel_id}"
+            )]]
+        )
+        await query.edit_message_text(
+            f"❌ 同步失败:{exc}", reply_markup=kb
+        )
+        return
+
+    items = [v2node_to_db_row(n) for n in nodes]
+    async with crud.session() as s:
+        count = await crud.replace_panel_nodes(s, panel_id, items)
+        await crud.add_log(
+            s,
+            user_id=update.effective_user.id,
+            server_id=None,
+            action="panel.node.sync",
+            result="success",
+            detail=f"panel_id={panel_id}, count={count}",
+        )
+        await s.commit()
+
+    await _render_node_list(
+        update, context, panel_id, banner=f"✅ 已同步 {count} 个节点"
     )
-    await query.edit_message_text(f"{prefix} {msg}", reply_markup=kb)
 
 
 def register(application, ctx) -> None:
@@ -420,5 +487,11 @@ def register(application, ctx) -> None:
         CallbackQueryHandler(
             cb_node_drop_do,
             pattern=f"^{CB_PANEL_NODE_DROP_OK}\\d+:\\d+$",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            cb_sync_nodes,
+            pattern=f"^{CB_PANEL_NODE_SYNC}\\d+$",
         )
     )

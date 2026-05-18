@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from ..config import Config
 from ..core.crypto import Crypto
@@ -46,9 +47,10 @@ CB_DEL_PANEL_OK = "delpnlok:"  # delpnlok:<id>
 CB_BACK_PANELS = "back:panels"
 CB_PANEL_NODES = "pnln:"  # pnln:<panel_id> -> v2node 列表
 CB_PANEL_NODE = "pnldd:"  # pnldd:<panel_id>:<node_id> -> 节点详情
-CB_PANEL_NODE_SHOW = "pnlsh:"  # pnlsh:<panel_id>:<node_id> -> 切换上下架
+CB_PANEL_NODE_SHOW = "pnlsh:"  # pnlsh:<panel_id>:<node_id>:<0|1> -> 切换上下架
 CB_PANEL_NODE_DROP = "pnldrop:"  # pnldrop:<panel_id>:<node_id> -> 删除二次确认
 CB_PANEL_NODE_DROP_OK = "pnldropok:"  # pnldropok:<panel_id>:<node_id> -> 真正删除
+CB_PANEL_NODE_SYNC = "pnlsync:"  # pnlsync:<panel_id> -> 从面板同步节点
 CB_NOOP = "noop"
 
 
@@ -57,3 +59,19 @@ def truncate(text: str, limit: int = 3500) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n…(已截断,共 {len(text)} 字符)"
+
+
+def humanize_age(when: datetime | None) -> str:
+    """把 UTC 时间点转换为相对当前的中文描述(刚刚 / X 分钟前 / X 小时前 / X 天前)。"""
+    if when is None:
+        return "从未"
+    sec = int((datetime.utcnow() - when).total_seconds())
+    if sec < 0:
+        sec = 0
+    if sec < 60:
+        return "刚刚"
+    if sec < 3600:
+        return f"{sec // 60} 分钟前"
+    if sec < 86400:
+        return f"{sec // 3600} 小时前"
+    return f"{sec // 86400} 天前"

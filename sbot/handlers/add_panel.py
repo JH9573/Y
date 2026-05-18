@@ -23,6 +23,7 @@ from ..db import crud
 from ..db.models import Panel
 from ..services.v2board_api import (
     V2BoardAPIError,
+    v2node_to_db_row,
     validate_base_url,
     validate_email,
     validate_secure_path,
@@ -168,12 +169,49 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             detail=f"panel_id={panel.id}, name={panel.name}",
         )
         await s.commit()
+        panel_id = panel.id
         panel_name = panel.name
+
+    # panel 已落库,再拉一次节点存入本地缓存。失败不阻塞 panel 注册。
+    sync_tail = ""
+    async with crud.session() as s:
+        panel = await crud.get_panel(s, panel_id)
+        try:
+            nodes = await ctx.v2board.get_v2nodes(panel)
+        except V2BoardAPIError as exc:
+            log.warning("初始化拉取节点失败 panel_id=%s: %s", panel_id, exc)
+            sync_tail = (
+                f"\n⚠️ 节点拉取失败:{exc}\n"
+                f"稍后可在节点列表点「🔄 同步」重试。"
+            )
+            await crud.add_log(
+                s,
+                user_id=update.effective_user.id,
+                server_id=None,
+                action="panel.node.sync",
+                result="failed",
+                detail=f"panel_id={panel_id}: {exc}",
+            )
+            await s.commit()
+        else:
+            items = [v2node_to_db_row(n) for n in nodes]
+            count = await crud.replace_panel_nodes(s, panel_id, items)
+            sync_tail = f"\n已导入 {count} 个 v2node 节点。"
+            await crud.add_log(
+                s,
+                user_id=update.effective_user.id,
+                server_id=None,
+                action="panel.node.sync",
+                result="success",
+                detail=f"panel_id={panel_id}, count={count}",
+            )
+            await s.commit()
 
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
-            f"✅ 面板「{panel_name}」已添加,登录测试通过。\n"
+            f"✅ 面板「{panel_name}」已添加,登录测试通过。"
+            f"{sync_tail}\n"
             f"使用 /panel 查看面板列表。"
         ),
     )
