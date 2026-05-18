@@ -73,6 +73,28 @@ class Node(Base):
     server: Mapped[Server] = relationship(back_populates="nodes")
 
 
+class Panel(Base):
+    __tablename__ = "panels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    base_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    secure_path: Mapped[str] = mapped_column(String(128), nullable=False)
+    email: Mapped[str] = mapped_column(String(128), nullable=False)
+    password: Mapped[str] = mapped_column(Text, nullable=False)  # 加密存储
+    auth_data: Mapped[str | None] = mapped_column(Text, nullable=True)  # 加密缓存的 JWT
+    auth_data_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
 class OperationLog(Base):
     __tablename__ = "operation_logs"
 

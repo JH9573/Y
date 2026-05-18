@@ -34,6 +34,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "常用命令:\n"
         "/server — 列出所有服务器并进入操作菜单\n"
         "/addserver — 添加一台新服务器\n"
+        "/panel — 列出所有 v2board 面板并进入操作菜单\n"
+        "/addpanel — 添加一个 v2board 面板\n"
         "/logs — 查看最近的操作日志\n"
         "/cancel — 中止当前对话"
     )

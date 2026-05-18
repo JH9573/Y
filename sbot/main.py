@@ -22,8 +22,20 @@ from .core.auth import require_auth
 from .core.crypto import Crypto
 from .core.ssh import SSHClient
 from .db import crud
-from .handlers import add_node, add_server, install, logs, node, ops, server, uninstall
+from .handlers import (
+    add_node,
+    add_panel,
+    add_server,
+    install,
+    logs,
+    node,
+    ops,
+    panel,
+    server,
+    uninstall,
+)
 from .handlers.common import AppContext, CTX_KEY
+from .services.v2board_api import V2BoardClient
 
 
 log = logging.getLogger(__name__)
@@ -93,7 +105,8 @@ def build_application() -> Application:
 
     crypto = Crypto(cfg.cred_encryption_key)
     ssh_client = SSHClient(crypto, timeout=cfg.ssh_timeout)
-    ctx = AppContext(config=cfg, crypto=crypto, ssh=ssh_client)
+    v2board_client = V2BoardClient(crypto, timeout=cfg.ssh_timeout)
+    ctx = AppContext(config=cfg, crypto=crypto, ssh=ssh_client, v2board=v2board_client)
 
     application = (
         ApplicationBuilder()
@@ -107,11 +120,13 @@ def build_application() -> Application:
     # 以确保它能优先消费进入对话的回调。
     add_server.register(application, ctx)
     add_node.register(application, ctx)
+    add_panel.register(application, ctx)
     install.register(application, ctx)
     uninstall.register(application, ctx)
     server.register(application, ctx)
     ops.register(application, ctx)
     node.register(application, ctx)
+    panel.register(application, ctx)
     logs.register(application, ctx)
 
     _wrap_with_auth(application, cfg.allowed_user_ids)

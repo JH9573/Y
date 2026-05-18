@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from ..config import Config
 from ..core.crypto import Crypto
 from ..core.ssh import SSHClient
+from ..services.v2board_api import V2BoardClient
 
 
 @dataclass
@@ -15,6 +16,7 @@ class AppContext:
     config: Config
     crypto: Crypto
     ssh: SSHClient
+    v2board: V2BoardClient
 
 
 CTX_KEY = "app_ctx"
@@ -38,6 +40,10 @@ CB_NODE_DEL = "nodedel:"  # nodedel:<server_id>:<node_pk>
 CB_NODE_DEL_OK = "nodedelok:"  # nodedelok:<server_id>:<node_pk>
 CB_NODE_SYNC = "nodesync:"  # nodesync:<server_id>
 CB_BACK_SERVERS = "back:servers"
+CB_PANEL_PREFIX = "pnl:"  # pnl:<id> -> 进入面板菜单
+CB_DEL_PANEL = "delpnl:"  # delpnl:<id>
+CB_DEL_PANEL_OK = "delpnlok:"  # delpnlok:<id>
+CB_BACK_PANELS = "back:panels"
 CB_NOOP = "noop"
 
 

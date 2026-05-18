@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from .models import Base, Node, OperationLog, Server
+from datetime import datetime
+
+from .models import Base, Node, OperationLog, Panel, Server
 
 
 _engine = None
@@ -179,6 +181,59 @@ async def replace_nodes(
         count += 1
     await s.flush()
     return count
+
+
+# ---------- panels ----------
+
+async def list_panels(s: AsyncSession) -> list[Panel]:
+    result = await s.execute(select(Panel).order_by(Panel.id))
+    return list(result.scalars().all())
+
+
+async def get_panel(s: AsyncSession, panel_id: int) -> Optional[Panel]:
+    return await s.get(Panel, panel_id)
+
+
+async def get_panel_by_name(s: AsyncSession, name: str) -> Optional[Panel]:
+    result = await s.execute(select(Panel).where(Panel.name == name))
+    return result.scalar_one_or_none()
+
+
+async def create_panel(
+    s: AsyncSession,
+    *,
+    name: str,
+    base_url: str,
+    secure_path: str,
+    email: str,
+    password: str,
+    auth_data: str | None = None,
+) -> Panel:
+    panel = Panel(
+        name=name,
+        base_url=base_url,
+        secure_path=secure_path,
+        email=email,
+        password=password,
+        auth_data=auth_data,
+        auth_data_updated_at=datetime.utcnow() if auth_data else None,
+    )
+    s.add(panel)
+    await s.flush()
+    return panel
+
+
+async def update_panel_auth(s: AsyncSession, panel_id: int, auth_data: str) -> None:
+    panel = await s.get(Panel, panel_id)
+    if panel is not None:
+        panel.auth_data = auth_data
+        panel.auth_data_updated_at = datetime.utcnow()
+
+
+async def delete_panel(s: AsyncSession, panel_id: int) -> None:
+    panel = await s.get(Panel, panel_id)
+    if panel is not None:
+        await s.delete(panel)
 
 
 # ---------- operation logs ----------
