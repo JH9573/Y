@@ -15,6 +15,7 @@ from .common import (
     CB_BACK_PANELS,
     CB_DEL_PANEL,
     CB_DEL_PANEL_OK,
+    CB_PANEL_NODES,
     CB_PANEL_PREFIX,
 )
 
@@ -89,6 +90,11 @@ async def _render_panel_menu(
     )
 
     kb = [
+        [
+            InlineKeyboardButton(
+                "📋 节点列表", callback_data=f"{CB_PANEL_NODES}{panel.id}"
+            ),
+        ],
         [InlineKeyboardButton("🗑 删除面板", callback_data=f"{CB_DEL_PANEL}{panel.id}")],
         [InlineKeyboardButton("⬅ 返回列表", callback_data=CB_BACK_PANELS)],
     ]

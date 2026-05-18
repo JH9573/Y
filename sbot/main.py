@@ -31,6 +31,7 @@ from .handlers import (
     node,
     ops,
     panel,
+    panel_node,
     server,
     uninstall,
 )
@@ -127,6 +128,7 @@ def build_application() -> Application:
     ops.register(application, ctx)
     node.register(application, ctx)
     panel.register(application, ctx)
+    panel_node.register(application, ctx)
     logs.register(application, ctx)
 
     _wrap_with_auth(application, cfg.allowed_user_ids)
