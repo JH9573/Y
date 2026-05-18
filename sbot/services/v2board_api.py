@@ -294,3 +294,22 @@ class V2BoardClient:
             "server/v2node/drop",
             json_body={"id": node_id},
         )
+
+    async def save_v2node(
+        self,
+        panel: Panel,
+        payload: dict[str, Any],
+        *,
+        node_id: int | None = None,
+    ) -> None:
+        """创建或更新 v2node 节点。
+
+        传 node_id 视为更新;省略则视为创建。payload 必须已经包含
+        v2board /server/v2node/save 所需的字段。
+        """
+        body = dict(payload)
+        if node_id is not None:
+            body["id"] = node_id
+        await self._request_admin(
+            panel, "POST", "server/v2node/save", json_body=body
+        )

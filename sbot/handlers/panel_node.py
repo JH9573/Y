@@ -18,8 +18,10 @@ from ..db.models import PanelNode
 from ..services.v2board_api import V2BoardAPIError, v2node_to_db_row
 from .common import (
     CB_PANEL_NODE,
+    CB_PANEL_NODE_ADD,
     CB_PANEL_NODE_DROP,
     CB_PANEL_NODE_DROP_OK,
+    CB_PANEL_NODE_EDIT,
     CB_PANEL_NODE_SHOW,
     CB_PANEL_NODE_SYNC,
     CB_PANEL_NODES,
@@ -84,6 +86,10 @@ async def _render_node_list(
         kb = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton(
+                    "➕ 添加 shadowsocks",
+                    callback_data=f"{CB_PANEL_NODE_ADD}{panel_id}",
+                )],
+                [InlineKeyboardButton(
                     "🔄 同步", callback_data=f"{CB_PANEL_NODE_SYNC}{panel_id}"
                 )],
                 [InlineKeyboardButton(
@@ -92,7 +98,7 @@ async def _render_node_list(
             ]
         )
         header_lines.append("")
-        header_lines.append("(暂无节点) 点「🔄 同步」从面板拉取。")
+        header_lines.append("(暂无节点) 点「🔄 同步」从面板拉取或「➕ 添加」新建。")
         await query.edit_message_text("\n".join(header_lines), reply_markup=kb)
         return
 
@@ -114,6 +120,12 @@ async def _render_node_list(
     if len(nodes) > NODE_LIST_LIMIT:
         header_lines.append(f"…仅显示前 {NODE_LIST_LIMIT} 个,共 {len(nodes)}")
 
+    rows.append(
+        [InlineKeyboardButton(
+            "➕ 添加 shadowsocks",
+            callback_data=f"{CB_PANEL_NODE_ADD}{panel_id}",
+        )]
+    )
     rows.append(
         [
             InlineKeyboardButton(
@@ -190,13 +202,20 @@ async def _render_node_detail(
                 callback_data=f"{CB_PANEL_NODE_DROP}{panel_id}:{node_id}",
             ),
         ],
-        [
-            InlineKeyboardButton(
-                "⬅ 返回列表",
-                callback_data=f"{CB_PANEL_NODES}{panel_id}",
-            ),
-        ],
     ]
+    if node.protocol == "shadowsocks":
+        rows.append([
+            InlineKeyboardButton(
+                "✏️ 编辑",
+                callback_data=f"{CB_PANEL_NODE_EDIT}{panel_id}:{node_id}",
+            ),
+        ])
+    rows.append([
+        InlineKeyboardButton(
+            "⬅ 返回列表",
+            callback_data=f"{CB_PANEL_NODES}{panel_id}",
+        ),
+    ])
     await query.edit_message_text(
         truncate(text), reply_markup=InlineKeyboardMarkup(rows)
     )

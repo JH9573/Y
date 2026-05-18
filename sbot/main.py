@@ -26,6 +26,7 @@ from .handlers import (
     add_node,
     add_panel,
     add_server,
+    edit_panel_node,
     install,
     logs,
     node,
@@ -129,6 +130,7 @@ def build_application() -> Application:
     node.register(application, ctx)
     panel.register(application, ctx)
     panel_node.register(application, ctx)
+    edit_panel_node.register(application, ctx)
     logs.register(application, ctx)
 
     _wrap_with_auth(application, cfg.allowed_user_ids)
