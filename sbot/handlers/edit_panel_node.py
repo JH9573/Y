@@ -86,6 +86,8 @@ SAVE_FIELDS = {
 }
 
 KEEP_CB = "pnlsave:keep"
+HOST_PICK_CB = "pnlsave:hs:"  # pnlsave:hs:<server_id>
+HOST_MANUAL_CB = "pnlsave:hm"
 
 
 # ---------- 通用 helper ----------
@@ -222,21 +224,67 @@ async def step_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return await _prompt_host(update, context)
 
 
+def _truncate(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 async def _prompt_host(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     data = context.user_data[KEY]
+    async with crud.session() as s:
+        servers = await crud.list_servers(s)
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for srv in servers:
+        if not srv.host:
+            continue
+        label = _truncate(f"🖥 {srv.name} ({srv.host})", 60)
+        rows.append([InlineKeyboardButton(
+            label, callback_data=f"{HOST_PICK_CB}{srv.id}"
+        )])
     if _is_edit(context):
         val = data["initial"].get("host", "")
-        await _reply(
-            update,
-            f"请输入节点地址 host(当前: {val}):",
-            reply_markup=_keep_kb(val),
-        )
+        keep_label = f"保留 ({val})" if val not in (None, "") else "保留 (空)"
+        rows.append([InlineKeyboardButton(keep_label, callback_data=KEEP_CB)])
+    rows.append([InlineKeyboardButton("✏️ 手动输入", callback_data=HOST_MANUAL_CB)])
+
+    if _is_edit(context):
+        val = data["initial"].get("host", "")
+        prompt = f"请选择节点地址 host(当前: {val}),或手动输入:"
     else:
-        await _reply(update, "请输入节点地址 host(IP 或域名):")
+        prompt = "请选择节点地址 host(IP 或域名),或手动输入:"
+    if not servers:
+        prompt += "\n(暂无已登记服务器,请点「✏️ 手动输入」)"
+
+    await _reply(update, prompt, reply_markup=InlineKeyboardMarkup(rows))
     return HOST
 
 
 # ---------- step: HOST ----------
+
+async def step_host_pick_server(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    server_id = int(query.data.split(":")[-1])
+    async with crud.session() as s:
+        server = await crud.get_server(s, server_id)
+    if server is None or not server.host:
+        await query.edit_message_text("该服务器已被删除或地址为空,请重新选择。")
+        return await _prompt_host(update, context)
+    data = context.user_data[KEY]
+    data["values"]["host"] = server.host
+    return await _prompt_port(update, context)
+
+
+async def step_host_manual(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("请输入节点地址 host(IP 或域名):")
+    return HOST
+
 
 async def step_host(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     data = context.user_data[KEY]
@@ -973,6 +1021,12 @@ def register(application, ctx) -> None:
                 MessageHandler(NON_MENU_TEXT_FILTER, step_name),
             ],
             HOST: [
+                CallbackQueryHandler(
+                    step_host_pick_server, pattern=rf"^{HOST_PICK_CB}\d+$"
+                ),
+                CallbackQueryHandler(
+                    step_host_manual, pattern=f"^{HOST_MANUAL_CB}$"
+                ),
                 CallbackQueryHandler(step_host, pattern=f"^{KEEP_CB}$"),
                 MessageHandler(NON_MENU_TEXT_FILTER, step_host),
             ],
