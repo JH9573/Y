@@ -49,12 +49,13 @@ log = logging.getLogger(__name__)
     CIPHER,
     TLS,
     NETWORK,
+    NET_SETTINGS,
     RATE,
     PARENT,
     GROUPS,
     ADVANCED,
     CONFIRM,
-) = range(12)
+) = range(13)
 
 # 父节点选择按钮一屏最多展示这么多;v2board 一般够用
 PARENT_LIST_LIMIT = 30
@@ -70,7 +71,9 @@ CIPHER_OPTIONS = [
     "2022-blake3-aes-256-gcm",
 ]
 TLS_OPTIONS: list[tuple[int, str]] = [(0, "关闭"), (1, "TLS")]
-NETWORK_OPTIONS = ["tcp", "ws", "grpc"]
+# shadowsocks 只有两种传输:原生 tcp 或 http 伪装
+NETWORK_OPTIONS: list[tuple[str, str]] = [("tcp", "tcp"), ("http", "http伪装")]
+NETWORK_VALUES = {v for v, _ in NETWORK_OPTIONS}
 
 # v2board V2nodeController::save 接受的字段白名单
 SAVE_FIELDS = {
@@ -410,8 +413,8 @@ async def _prompt_network(
 ) -> int:
     data = context.user_data[KEY]
     rows = [[
-        InlineKeyboardButton(n, callback_data=f"pnlsave:n:{n}")
-        for n in NETWORK_OPTIONS
+        InlineKeyboardButton(label, callback_data=f"pnlsave:n:{value}")
+        for value, label in NETWORK_OPTIONS
     ]]
     if _is_edit(context):
         current = data["initial"].get("network", "tcp")
@@ -431,13 +434,103 @@ async def step_network(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await query.answer()
     data = context.user_data[KEY]
     if query.data == KEEP_CB:
+        # 兼容旧数据,保留路径直接信任 initial 值
         net = str(data["initial"].get("network", "tcp"))
     else:
         net = query.data.split(":", 2)[2]
-    if net not in NETWORK_OPTIONS:
-        await query.message.reply_text("无效的 network。")
-        return NETWORK
+        if net not in NETWORK_VALUES:
+            await query.message.reply_text("无效的 network。")
+            return NETWORK
     data["values"]["network"] = net
+    return await _prompt_net_settings(update, context)
+
+
+# ---------- step: NET_SETTINGS ----------
+
+def _format_net_settings(value: Any) -> str:
+    if value in (None, "", {}):
+        return "(空)"
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+async def _prompt_net_settings(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    data = context.user_data[KEY]
+    net = data["values"].get("network", "tcp")
+    if net == "http":
+        sample = (
+            "{\n"
+            '  "header": {\n'
+            '    "type": "http",\n'
+            '    "request": {\n'
+            '      "path": ["/"],\n'
+            '      "headers": {"Host": ["www.bing.com"]}\n'
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+    else:
+        sample = "{}"
+
+    buttons = [[InlineKeyboardButton(
+        "跳过", callback_data="pnlsave:nsskip"
+    )]]
+    if _is_edit(context):
+        current = data["initial"].get("network_settings")
+        buttons.append([InlineKeyboardButton(
+            f"保留 ({_format_net_settings(current)})", callback_data=KEEP_CB
+        )])
+
+    text = (
+        f"可选:贴入 network_settings JSON(network = {net})。\n"
+        f"示例:\n\n{sample}\n\n"
+        "点「跳过」表示不带该字段。"
+    )
+    await _reply(update, text, reply_markup=InlineKeyboardMarkup(buttons))
+    return NET_SETTINGS
+
+
+async def step_net_settings_skip(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    data = context.user_data[KEY]
+    if query.data == KEEP_CB:
+        # 保留 initial 的 network_settings,不写 values 即可
+        pass
+    else:
+        # 显式跳过:把空 dict 写进 values,会清空 payload 里的 network_settings
+        data["values"]["network_settings"] = {}
+    return await _prompt_rate(update, context)
+
+
+async def step_net_settings_text(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    text = (update.message.text or "").strip()
+    if not text:
+        await update.message.reply_text(
+            "空白,请重新输入或点上一条消息的「跳过」:"
+        )
+        return NET_SETTINGS
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        await update.message.reply_text(
+            f"JSON 解析失败:{exc}\n请重新输入:"
+        )
+        return NET_SETTINGS
+    if not isinstance(parsed, dict):
+        await update.message.reply_text(
+            "network_settings 必须是 JSON 对象,请重新输入:"
+        )
+        return NET_SETTINGS
+    context.user_data[KEY]["values"]["network_settings"] = parsed
     return await _prompt_rate(update, context)
 
 
@@ -747,6 +840,8 @@ def _compose_payload(data: dict) -> dict[str, Any]:
         "group_id": v["group_id"],
         "parent_id": v.get("parent_id"),
     })
+    if "network_settings" in v:
+        payload["network_settings"] = v["network_settings"]
     payload.update(v.get("advanced") or {})
     payload.setdefault("disable_sni", 0)
     payload.setdefault("zero_rtt_handshake", 0)
@@ -905,7 +1000,16 @@ def register(application, ctx) -> None:
             NETWORK: [
                 CallbackQueryHandler(
                     step_network,
-                    pattern=r"^pnlsave:(n:(tcp|ws|grpc)|keep)$",
+                    pattern=r"^pnlsave:(n:(tcp|http)|keep)$",
+                ),
+            ],
+            NET_SETTINGS: [
+                CallbackQueryHandler(
+                    step_net_settings_skip,
+                    pattern=r"^pnlsave:(nsskip|keep)$",
+                ),
+                MessageHandler(
+                    NON_MENU_TEXT_FILTER, step_net_settings_text
                 ),
             ],
             RATE: [
