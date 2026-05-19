@@ -20,7 +20,13 @@ from telegram.ext import (
 from ..core.ssh import SSHError
 from ..db import crud
 from ..services.v2node_uninstall import UninstallError, uninstall_v2node
-from .common import CB_SERVER_PREFIX, CB_UNINSTALL_START, get_ctx
+from .common import (
+    ANY_MENU_TEXT_FILTER,
+    CB_SERVER_PREFIX,
+    CB_UNINSTALL_START,
+    NON_MENU_TEXT_FILTER,
+    get_ctx,
+)
 
 
 log = logging.getLogger(__name__)
@@ -137,10 +143,13 @@ def register(application, ctx) -> None:
         ],
         states={
             CONFIRM_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, step_confirm_name),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_confirm_name),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cmd_cancel),
+            MessageHandler(ANY_MENU_TEXT_FILTER, cmd_cancel),
+        ],
         name="uninstall",
         persistent=False,
     )

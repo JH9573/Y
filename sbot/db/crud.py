@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from .models import Base, Node, OperationLog, Server
+from datetime import datetime
+
+from .models import Base, Node, OperationLog, Panel, PanelNode, Server
 
 
 _engine = None
@@ -27,6 +29,24 @@ async def init_db(db_url: str) -> None:
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate_panels(conn)
+
+
+async def _migrate_panels(conn) -> None:
+    """对老库补齐 panels 表的新列(SQLite ALTER TABLE)。
+
+    create_all 不会 ALTER 已存在的表,所以这里手动补 api_host / api_key。
+    """
+    result = await conn.exec_driver_sql("PRAGMA table_info(panels)")
+    cols = {row[1] for row in result.fetchall()}
+    if "api_host" not in cols:
+        await conn.exec_driver_sql(
+            "ALTER TABLE panels ADD COLUMN api_host TEXT"
+        )
+    if "api_key" not in cols:
+        await conn.exec_driver_sql(
+            "ALTER TABLE panels ADD COLUMN api_key TEXT"
+        )
 
 
 def session() -> AsyncSession:
@@ -179,6 +199,151 @@ async def replace_nodes(
         count += 1
     await s.flush()
     return count
+
+
+# ---------- panels ----------
+
+async def list_panels(s: AsyncSession) -> list[Panel]:
+    result = await s.execute(select(Panel).order_by(Panel.id))
+    return list(result.scalars().all())
+
+
+async def get_panel(s: AsyncSession, panel_id: int) -> Optional[Panel]:
+    return await s.get(Panel, panel_id)
+
+
+async def get_panel_by_name(s: AsyncSession, name: str) -> Optional[Panel]:
+    result = await s.execute(select(Panel).where(Panel.name == name))
+    return result.scalar_one_or_none()
+
+
+async def create_panel(
+    s: AsyncSession,
+    *,
+    name: str,
+    base_url: str,
+    secure_path: str,
+    email: str,
+    password: str,
+    api_host: str | None = None,
+    api_key: str | None = None,
+    auth_data: str | None = None,
+) -> Panel:
+    panel = Panel(
+        name=name,
+        base_url=base_url,
+        secure_path=secure_path,
+        email=email,
+        password=password,
+        api_host=api_host,
+        api_key=api_key,
+        auth_data=auth_data,
+        auth_data_updated_at=datetime.utcnow() if auth_data else None,
+    )
+    s.add(panel)
+    await s.flush()
+    return panel
+
+
+async def update_panel_auth(s: AsyncSession, panel_id: int, auth_data: str) -> None:
+    panel = await s.get(Panel, panel_id)
+    if panel is not None:
+        panel.auth_data = auth_data
+        panel.auth_data_updated_at = datetime.utcnow()
+
+
+async def update_panel(
+    s: AsyncSession,
+    panel_id: int,
+    **fields,
+) -> None:
+    """更新 panel 的任意字段。仅允许已知字段。"""
+    allowed = {
+        "name", "base_url", "secure_path", "email", "password",
+        "api_host", "api_key",
+    }
+    panel = await s.get(Panel, panel_id)
+    if panel is None:
+        return
+    for key, value in fields.items():
+        if key in allowed:
+            setattr(panel, key, value)
+
+
+async def delete_panel(s: AsyncSession, panel_id: int) -> None:
+    panel = await s.get(Panel, panel_id)
+    if panel is not None:
+        await s.delete(panel)
+
+
+# ---------- panel nodes ----------
+
+async def list_panel_nodes(s: AsyncSession, panel_id: int) -> list[PanelNode]:
+    result = await s.execute(
+        select(PanelNode)
+        .where(PanelNode.panel_id == panel_id)
+        .order_by(PanelNode.sort.asc().nulls_last(), PanelNode.node_id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_panel_node(
+    s: AsyncSession, panel_id: int, node_id: int
+) -> Optional[PanelNode]:
+    result = await s.execute(
+        select(PanelNode).where(
+            PanelNode.panel_id == panel_id,
+            PanelNode.node_id == node_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def replace_panel_nodes(
+    s: AsyncSession,
+    panel_id: int,
+    items: Iterable[dict],
+) -> int:
+    """以远程为准覆盖该面板的节点缓存,返回最终节点数量。"""
+    await s.execute(delete(PanelNode).where(PanelNode.panel_id == panel_id))
+    count = 0
+    now = datetime.utcnow()
+    for item in items:
+        payload = dict(item)
+        payload.setdefault("synced_at", now)
+        s.add(PanelNode(panel_id=panel_id, **payload))
+        count += 1
+    await s.flush()
+    return count
+
+
+async def update_panel_node_show(
+    s: AsyncSession, panel_id: int, node_id: int, show: bool
+) -> None:
+    node = await get_panel_node(s, panel_id, node_id)
+    if node is not None:
+        node.show = show
+
+
+async def delete_panel_node(
+    s: AsyncSession, panel_id: int, node_id: int
+) -> None:
+    node = await get_panel_node(s, panel_id, node_id)
+    if node is not None:
+        await s.delete(node)
+
+
+async def latest_node_sync_at(
+    s: AsyncSession, panel_id: int
+) -> Optional[datetime]:
+    """最近一次成功同步的时间,空表返回 None。"""
+    result = await s.execute(
+        select(PanelNode.synced_at)
+        .where(PanelNode.panel_id == panel_id)
+        .order_by(PanelNode.synced_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 # ---------- operation logs ----------

@@ -21,6 +21,7 @@ from .common import (
     CB_SERVER_PREFIX,
     CB_UNINSTALL_START,
     get_ctx,
+    main_menu_kb,
 )
 from ..services.v2node import ACTIONS
 
@@ -31,13 +32,10 @@ log = logging.getLogger(__name__)
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "你好,这是 v2node 服务器管理 bot。\n\n"
-        "常用命令:\n"
-        "/server — 列出所有服务器并进入操作菜单\n"
-        "/addserver — 添加一台新服务器\n"
-        "/logs — 查看最近的操作日志\n"
-        "/cancel — 中止当前对话"
+        "用下方菜单按钮操作,也可继续使用斜杠命令:\n"
+        "/server  /addserver  /panel  /addpanel  /logs  /cancel"
     )
-    await update.effective_message.reply_text(text)
+    await update.effective_message.reply_text(text, reply_markup=main_menu_kb())
 
 
 async def cmd_server_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -46,7 +44,7 @@ async def cmd_server_list(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if not servers:
         await update.effective_message.reply_text(
-            "当前没有已登记的服务器,使用 /addserver 添加一台。"
+            "当前没有已登记的服务器,点「➕ 添加服务器」或发 /addserver 添加。"
         )
         return
 

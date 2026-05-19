@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+
+from telegram import KeyboardButton, ReplyKeyboardMarkup
+from telegram.ext import filters
 
 from ..config import Config
 from ..core.crypto import Crypto
 from ..core.ssh import SSHClient
+from ..services.v2board_api import V2BoardClient
 
 
 @dataclass
@@ -15,6 +20,7 @@ class AppContext:
     config: Config
     crypto: Crypto
     ssh: SSHClient
+    v2board: V2BoardClient
 
 
 CTX_KEY = "app_ctx"
@@ -38,6 +44,23 @@ CB_NODE_DEL = "nodedel:"  # nodedel:<server_id>:<node_pk>
 CB_NODE_DEL_OK = "nodedelok:"  # nodedelok:<server_id>:<node_pk>
 CB_NODE_SYNC = "nodesync:"  # nodesync:<server_id>
 CB_BACK_SERVERS = "back:servers"
+CB_PANEL_PREFIX = "pnl:"  # pnl:<id> -> 进入面板菜单
+CB_DEL_PANEL = "delpnl:"  # delpnl:<id>
+CB_DEL_PANEL_OK = "delpnlok:"  # delpnlok:<id>
+CB_BACK_PANELS = "back:panels"
+CB_PANEL_NODES = "pnln:"  # pnln:<panel_id> -> v2node 列表
+CB_PANEL_NODE = "pnldd:"  # pnldd:<panel_id>:<node_id> -> 节点详情
+CB_PANEL_NODE_SHOW = "pnlsh:"  # pnlsh:<panel_id>:<node_id>:<0|1> -> 切换上下架
+CB_PANEL_NODE_DROP = "pnldrop:"  # pnldrop:<panel_id>:<node_id> -> 删除二次确认
+CB_PANEL_NODE_DROP_OK = "pnldropok:"  # pnldropok:<panel_id>:<node_id> -> 真正删除
+CB_PANEL_NODE_SYNC = "pnlsync:"  # pnlsync:<panel_id> -> 从面板同步节点
+CB_PANEL_NODE_ADD = "pnladd:"  # pnladd:<panel_id> -> 添加 shadowsocks 节点
+CB_PANEL_NODE_EDIT = "pnledit:"  # pnledit:<panel_id>:<node_id> -> 编辑 shadowsocks 节点
+CB_EDIT_PANEL = "epnl:"  # epnl:<panel_id> -> 编辑面板信息
+CB_SYNC_PANEL_CREDS = "psync:"  # psync:<panel_id> -> 重拉 api_host/api_key
+CB_NODE_ADD_PANEL = "naddp:"  # naddp:<server_id>:<panel_id> -> 添加节点二级:选面板后
+CB_NODE_ADD_NODE = "naddn:"  # naddn:<server_id>:<panel_id>:<node_id> -> 添加节点三级:选节点后
+CB_NODE_ADD_OK = "naddok:"  # naddok:<server_id>:<panel_id>:<node_id> -> 写远程
 CB_NOOP = "noop"
 
 
@@ -46,3 +69,98 @@ def truncate(text: str, limit: int = 3500) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n…(已截断,共 {len(text)} 字符)"
+
+
+def humanize_age(when: datetime | None) -> str:
+    """把 UTC 时间点转换为相对当前的中文描述(刚刚 / X 分钟前 / X 小时前 / X 天前)。"""
+    if when is None:
+        return "从未"
+    sec = int((datetime.utcnow() - when).total_seconds())
+    if sec < 0:
+        sec = 0
+    if sec < 60:
+        return "刚刚"
+    if sec < 3600:
+        return f"{sec // 60} 分钟前"
+    if sec < 86400:
+        return f"{sec // 3600} 小时前"
+    return f"{sec // 86400} 天前"
+
+
+# ---------- Reply keyboard 菜单 ----------
+
+# 主菜单
+MENU_SERVER_GROUP = "🖥 服务器管理"
+MENU_PANEL_GROUP = "🎛 面板管理"
+MENU_LOGS = "📜 操作日志"
+MENU_CANCEL = "❌ 取消"
+
+# 服务器子菜单
+MENU_SERVER_LIST = "📋 服务器列表"
+MENU_SERVER_ADD = "➕ 添加服务器"
+
+# 面板子菜单
+MENU_PANEL_LIST = "📋 面板列表"
+MENU_PANEL_ADD = "➕ 添加面板"
+
+# 通用
+MENU_BACK_MAIN = "⬅ 返回主菜单"
+
+ALL_MENU_TEXTS: frozenset[str] = frozenset({
+    MENU_SERVER_GROUP, MENU_PANEL_GROUP, MENU_LOGS, MENU_CANCEL,
+    MENU_SERVER_LIST, MENU_SERVER_ADD,
+    MENU_PANEL_LIST, MENU_PANEL_ADD,
+    MENU_BACK_MAIN,
+})
+
+# ConversationHandler 内部用,排除菜单按钮文本以免被 state 误吃
+NON_MENU_TEXT_FILTER = (
+    filters.TEXT & ~filters.COMMAND & ~filters.Text(list(ALL_MENU_TEXTS))
+)
+# 用于 ConversationHandler fallback:把任何菜单按钮当成取消,
+# 避免用户对话中途点别处时既不被 conversation 消费、又被 menu 处理。
+ANY_MENU_TEXT_FILTER = filters.Text(list(ALL_MENU_TEXTS))
+
+
+def main_menu_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton(MENU_SERVER_GROUP), KeyboardButton(MENU_PANEL_GROUP)],
+            [KeyboardButton(MENU_LOGS)],
+            [KeyboardButton(MENU_CANCEL)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def server_menu_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton(MENU_SERVER_LIST), KeyboardButton(MENU_SERVER_ADD)],
+            [KeyboardButton(MENU_BACK_MAIN)],
+            [KeyboardButton(MENU_CANCEL)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def panel_menu_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton(MENU_PANEL_LIST), KeyboardButton(MENU_PANEL_ADD)],
+            [KeyboardButton(MENU_BACK_MAIN)],
+            [KeyboardButton(MENU_CANCEL)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def cancel_only_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(MENU_CANCEL)]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
