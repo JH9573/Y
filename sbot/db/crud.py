@@ -29,6 +29,24 @@ async def init_db(db_url: str) -> None:
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate_panels(conn)
+
+
+async def _migrate_panels(conn) -> None:
+    """对老库补齐 panels 表的新列(SQLite ALTER TABLE)。
+
+    create_all 不会 ALTER 已存在的表,所以这里手动补 api_host / api_key。
+    """
+    result = await conn.exec_driver_sql("PRAGMA table_info(panels)")
+    cols = {row[1] for row in result.fetchall()}
+    if "api_host" not in cols:
+        await conn.exec_driver_sql(
+            "ALTER TABLE panels ADD COLUMN api_host TEXT"
+        )
+    if "api_key" not in cols:
+        await conn.exec_driver_sql(
+            "ALTER TABLE panels ADD COLUMN api_key TEXT"
+        )
 
 
 def session() -> AsyncSession:
@@ -207,6 +225,8 @@ async def create_panel(
     secure_path: str,
     email: str,
     password: str,
+    api_host: str | None = None,
+    api_key: str | None = None,
     auth_data: str | None = None,
 ) -> Panel:
     panel = Panel(
@@ -215,6 +235,8 @@ async def create_panel(
         secure_path=secure_path,
         email=email,
         password=password,
+        api_host=api_host,
+        api_key=api_key,
         auth_data=auth_data,
         auth_data_updated_at=datetime.utcnow() if auth_data else None,
     )
@@ -228,6 +250,24 @@ async def update_panel_auth(s: AsyncSession, panel_id: int, auth_data: str) -> N
     if panel is not None:
         panel.auth_data = auth_data
         panel.auth_data_updated_at = datetime.utcnow()
+
+
+async def update_panel(
+    s: AsyncSession,
+    panel_id: int,
+    **fields,
+) -> None:
+    """更新 panel 的任意字段。仅允许已知字段。"""
+    allowed = {
+        "name", "base_url", "secure_path", "email", "password",
+        "api_host", "api_key",
+    }
+    panel = await s.get(Panel, panel_id)
+    if panel is None:
+        return
+    for key, value in fields.items():
+        if key in allowed:
+            setattr(panel, key, value)
 
 
 async def delete_panel(s: AsyncSession, panel_id: int) -> None:

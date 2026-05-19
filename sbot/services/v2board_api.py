@@ -313,3 +313,32 @@ class V2BoardClient:
         await self._request_admin(
             panel, "POST", "server/v2node/save", json_body=body
         )
+
+    async def fetch_config(self, panel: Panel) -> dict[str, Any]:
+        """拉取面板系统配置(用于读取 server_api_url / server_token 等)。"""
+        payload = await self._request_admin(panel, "GET", "config/fetch")
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise V2BoardAPIError("config/fetch 响应缺少 data 字段")
+        return data
+
+    async def fetch_server_credentials(
+        self, panel: Panel
+    ) -> tuple[str, str | None]:
+        """从面板配置里取 (api_host, api_key)。
+
+        api_host 三重 fallback: server.server_api_url → site.app_url → panel.base_url。
+        api_key 为空或缺失时返回 None。
+        """
+        cfg = await self.fetch_config(panel)
+        server = cfg.get("server") if isinstance(cfg.get("server"), dict) else {}
+        site = cfg.get("site") if isinstance(cfg.get("site"), dict) else {}
+        api_host = (
+            server.get("server_api_url")
+            or site.get("app_url")
+            or panel.base_url
+        )
+        api_host = str(api_host).strip().rstrip("/")
+        api_key = server.get("server_token")
+        api_key = str(api_key).strip() if api_key else None
+        return api_host, (api_key or None)

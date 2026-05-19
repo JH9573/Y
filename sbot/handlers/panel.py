@@ -15,8 +15,10 @@ from .common import (
     CB_BACK_PANELS,
     CB_DEL_PANEL,
     CB_DEL_PANEL_OK,
+    CB_EDIT_PANEL,
     CB_PANEL_NODES,
     CB_PANEL_PREFIX,
+    CB_SYNC_PANEL_CREDS,
     humanize_age,
 )
 
@@ -84,12 +86,16 @@ async def _render_panel_menu(
         latest_sync = await crud.latest_node_sync_at(s, panel_id)
 
     auth_state = "已登录" if panel.auth_data else "未登录"
+    creds_state = "已记录" if (panel.api_host and panel.api_key) else "未记录"
     header = (
         f"面板 {panel.name}\n"
         f"地址: {panel.base_url}\n"
         f"后台路径: {panel.secure_path}\n"
         f"管理员: {panel.email}\n"
         f"状态: {auth_state}\n"
+        f"通信凭据: {creds_state}"
+        + (f" (api_host={panel.api_host})" if panel.api_host else "")
+        + "\n"
         f"已缓存 v2node: {len(nodes)} 个\n"
         f"最近同步: {humanize_age(latest_sync)}"
     )
@@ -98,6 +104,15 @@ async def _render_panel_menu(
         [
             InlineKeyboardButton(
                 "📋 节点列表", callback_data=f"{CB_PANEL_NODES}{panel.id}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "✏️ 编辑面板", callback_data=f"{CB_EDIT_PANEL}{panel.id}"
+            ),
+            InlineKeyboardButton(
+                "🔄 同步通信凭据",
+                callback_data=f"{CB_SYNC_PANEL_CREDS}{panel.id}",
             ),
         ],
         [InlineKeyboardButton("🗑 删除面板", callback_data=f"{CB_DEL_PANEL}{panel.id}")],

@@ -82,6 +82,8 @@ class Panel(Base):
     secure_path: Mapped[str] = mapped_column(String(128), nullable=False)
     email: Mapped[str] = mapped_column(String(128), nullable=False)
     password: Mapped[str] = mapped_column(Text, nullable=False)  # 加密存储
+    api_host: Mapped[str | None] = mapped_column(Text, nullable=True)  # 节点通信地址
+    api_key: Mapped[str | None] = mapped_column(Text, nullable=True)  # 节点通信密钥(加密存储)
     auth_data: Mapped[str | None] = mapped_column(Text, nullable=True)  # 加密缓存的 JWT
     auth_data_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

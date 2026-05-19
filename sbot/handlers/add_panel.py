@@ -172,6 +172,32 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         panel_id = panel.id
         panel_name = panel.name
 
+    # 自动拉一次 server_api_url / server_token,失败不阻塞 panel 注册
+    creds_tail = ""
+    async with crud.session() as s:
+        panel = await crud.get_panel(s, panel_id)
+        try:
+            api_host, api_key = await ctx.v2board.fetch_server_credentials(panel)
+        except V2BoardAPIError as exc:
+            log.warning("初始化拉取通信凭据失败 panel_id=%s: %s", panel_id, exc)
+            creds_tail = (
+                f"\n⚠️ 通信凭据拉取失败:{exc}"
+                f"\n  服务器添加节点会用到,稍后请在面板菜单点「🔄 同步通信凭据」补上。"
+            )
+        else:
+            encrypted_key = ctx.crypto.encrypt(api_key) if api_key else None
+            await crud.update_panel(
+                s, panel_id, api_host=api_host, api_key=encrypted_key,
+            )
+            if api_key:
+                creds_tail = f"\n通信凭据已记录(api_host={api_host})。"
+            else:
+                creds_tail = (
+                    f"\n⚠️ 面板未配置 server_token,无法用于服务器添加节点。"
+                    f"\n  请到面板「系统配置 → 节点通信」填写后,在面板菜单点「🔄 同步通信凭据」。"
+                )
+        await s.commit()
+
     # panel 已落库,再拉一次节点存入本地缓存。失败不阻塞 panel 注册。
     sync_tail = ""
     async with crud.session() as s:
@@ -181,8 +207,8 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         except V2BoardAPIError as exc:
             log.warning("初始化拉取节点失败 panel_id=%s: %s", panel_id, exc)
             sync_tail = (
-                f"\n⚠️ 节点拉取失败:{exc}\n"
-                f"稍后可在节点列表点「🔄 同步」重试。"
+                f"\n⚠️ 节点拉取失败:{exc}"
+                f"\n  稍后可在节点列表点「🔄 同步」重试。"
             )
             await crud.add_log(
                 s,
@@ -211,7 +237,7 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         chat_id=chat_id,
         text=(
             f"✅ 面板「{panel_name}」已添加,登录测试通过。"
-            f"{sync_tail}\n"
+            f"{creds_tail}{sync_tail}\n"
             f"使用 /panel 查看面板列表。"
         ),
     )
