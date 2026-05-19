@@ -37,6 +37,9 @@ CB_OPS_CONFIRM = "opsc:"  # opsc:<id>:<action> -> 二次确认后真正执行
 CB_DEL_SERVER = "delsrv:"  # delsrv:<id>
 CB_DEL_SERVER_OK = "delsrvok:"  # delsrvok:<id>
 CB_INSTALL_START = "inst:"  # inst:<id>
+CB_INSTALL_PANEL = "instp:"  # instp:<server_id>:<panel_id> -> 安装流程选面板后
+CB_INSTALL_NODE = "instn:"   # instn:<server_id>:<panel_id>:<node_id> -> 选节点后
+CB_INSTALL_OK = "instok:"    # instok:<server_id>:<panel_id>:<node_id> -> 真正开装
 CB_UNINSTALL_START = "uninst:"  # uninst:<id>
 CB_NODE_MENU = "nodes:"  # nodes:<server_id>
 CB_NODE_ADD = "nodeadd:"  # nodeadd:<server_id>
@@ -61,6 +64,11 @@ CB_SYNC_PANEL_CREDS = "psync:"  # psync:<panel_id> -> 重拉 api_host/api_key
 CB_NODE_ADD_PANEL = "naddp:"  # naddp:<server_id>:<panel_id> -> 添加节点二级:选面板后
 CB_NODE_ADD_NODE = "naddn:"  # naddn:<server_id>:<panel_id>:<node_id> -> 添加节点三级:选节点后
 CB_NODE_ADD_OK = "naddok:"  # naddok:<server_id>:<panel_id>:<node_id> -> 写远程
+# 主菜单 reply keyboard 点「服务器管理 / 面板管理」后,在对话里弹出的二级 inline 菜单
+CB_MENU_SRV_LIST = "msrvls"  # 进入服务器列表
+CB_MENU_SRV_ADD = "msrvad"   # 进入添加服务器对话
+CB_MENU_PNL_LIST = "mpnlls"  # 进入面板列表
+CB_MENU_PNL_ADD = "mpnlad"   # 进入添加面板对话
 CB_NOOP = "noop"
 
 
@@ -89,28 +97,14 @@ def humanize_age(when: datetime | None) -> str:
 
 # ---------- Reply keyboard 菜单 ----------
 
-# 主菜单
+# 一级菜单(只在 reply keyboard 里出现)
 MENU_SERVER_GROUP = "🖥 服务器管理"
 MENU_PANEL_GROUP = "🎛 面板管理"
 MENU_LOGS = "📜 操作日志"
 MENU_CANCEL = "❌ 取消"
 
-# 服务器子菜单
-MENU_SERVER_LIST = "📋 服务器列表"
-MENU_SERVER_ADD = "➕ 添加服务器"
-
-# 面板子菜单
-MENU_PANEL_LIST = "📋 面板列表"
-MENU_PANEL_ADD = "➕ 添加面板"
-
-# 通用
-MENU_BACK_MAIN = "⬅ 返回主菜单"
-
 ALL_MENU_TEXTS: frozenset[str] = frozenset({
     MENU_SERVER_GROUP, MENU_PANEL_GROUP, MENU_LOGS, MENU_CANCEL,
-    MENU_SERVER_LIST, MENU_SERVER_ADD,
-    MENU_PANEL_LIST, MENU_PANEL_ADD,
-    MENU_BACK_MAIN,
 })
 
 # ConversationHandler 内部用,排除菜单按钮文本以免被 state 误吃
@@ -127,30 +121,6 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [
             [KeyboardButton(MENU_SERVER_GROUP), KeyboardButton(MENU_PANEL_GROUP)],
             [KeyboardButton(MENU_LOGS)],
-            [KeyboardButton(MENU_CANCEL)],
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
-
-
-def server_menu_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        [
-            [KeyboardButton(MENU_SERVER_LIST), KeyboardButton(MENU_SERVER_ADD)],
-            [KeyboardButton(MENU_BACK_MAIN)],
-            [KeyboardButton(MENU_CANCEL)],
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
-
-
-def panel_menu_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        [
-            [KeyboardButton(MENU_PANEL_LIST), KeyboardButton(MENU_PANEL_ADD)],
-            [KeyboardButton(MENU_BACK_MAIN)],
             [KeyboardButton(MENU_CANCEL)],
         ],
         resize_keyboard=True,

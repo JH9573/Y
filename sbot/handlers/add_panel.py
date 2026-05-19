@@ -12,11 +12,11 @@ from contextlib import suppress
 from telegram import Update
 from telegram.error import BadRequest
 from telegram.ext import (
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
-    filters,
 )
 
 from ..db import crud
@@ -30,11 +30,11 @@ from ..services.v2board_api import (
 )
 from .common import (
     ANY_MENU_TEXT_FILTER,
-    MENU_PANEL_ADD,
+    CB_MENU_PNL_ADD,
     NON_MENU_TEXT_FILTER,
     cancel_only_kb,
     get_ctx,
-    panel_menu_kb,
+    main_menu_kb,
 )
 
 
@@ -47,6 +47,8 @@ KEY = "addpanel"
 
 
 async def cmd_addpanel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.callback_query:
+        await update.callback_query.answer()
     context.user_data[KEY] = {}
     await update.effective_message.reply_text(
         "开始添加面板。任意时候可点「❌ 取消」或发送 /cancel 中止。\n\n"
@@ -153,7 +155,7 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"❌ 面板登录失败,面板未登记:{exc}",
-            reply_markup=panel_menu_kb(),
+            reply_markup=main_menu_kb(),
         )
         context.user_data.pop(KEY, None)
         return ConversationHandler.END
@@ -249,7 +251,7 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             f"{creds_tail}{sync_tail}\n"
             f"点「📋 面板列表」或发 /panel 查看面板。"
         ),
-        reply_markup=panel_menu_kb(),
+        reply_markup=main_menu_kb(),
     )
     context.user_data.pop(KEY, None)
     return ConversationHandler.END
@@ -258,7 +260,7 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop(KEY, None)
     await update.effective_message.reply_text(
-        "已取消添加面板。", reply_markup=panel_menu_kb(),
+        "已取消添加面板。", reply_markup=main_menu_kb(),
     )
     return ConversationHandler.END
 
@@ -267,7 +269,7 @@ def register(application, ctx) -> None:
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("addpanel", cmd_addpanel),
-            MessageHandler(filters.Text([MENU_PANEL_ADD]), cmd_addpanel),
+            CallbackQueryHandler(cmd_addpanel, pattern=f"^{CB_MENU_PNL_ADD}$"),
         ],
         states={
             NAME: [MessageHandler(NON_MENU_TEXT_FILTER, step_name)],
