@@ -27,7 +27,13 @@ from ..services.v2node_config import (
     validate_node_id,
 )
 from ..services.v2node_install import InstallError, InstallParams, install_v2node
-from .common import CB_INSTALL_START, CB_SERVER_PREFIX, get_ctx
+from .common import (
+    ANY_MENU_TEXT_FILTER,
+    CB_INSTALL_START,
+    CB_SERVER_PREFIX,
+    NON_MENU_TEXT_FILTER,
+    get_ctx,
+)
 
 
 log = logging.getLogger(__name__)
@@ -201,12 +207,15 @@ def register(application, ctx) -> None:
             CallbackQueryHandler(cb_install_start, pattern=f"^{CB_INSTALL_START}\\d+$"),
         ],
         states={
-            API_HOST: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_api_host)],
-            NODE_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_node_id)],
-            API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_api_key)],
+            API_HOST: [MessageHandler(NON_MENU_TEXT_FILTER, step_api_host)],
+            NODE_ID: [MessageHandler(NON_MENU_TEXT_FILTER, step_node_id)],
+            API_KEY: [MessageHandler(NON_MENU_TEXT_FILTER, step_api_key)],
             CONFIRM: [CallbackQueryHandler(step_confirm, pattern=r"^install:(ok|cancel)$")],
         },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cmd_cancel),
+            MessageHandler(ANY_MENU_TEXT_FILTER, cmd_cancel),
+        ],
         name="install",
         persistent=False,
     )

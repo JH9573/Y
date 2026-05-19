@@ -31,9 +31,11 @@ from ..services.v2board_api import (
     validate_secure_path,
 )
 from .common import (
+    ANY_MENU_TEXT_FILTER,
     CB_EDIT_PANEL,
     CB_PANEL_PREFIX,
     CB_SYNC_PANEL_CREDS,
+    NON_MENU_TEXT_FILTER,
     get_ctx,
 )
 
@@ -433,25 +435,25 @@ def register(application, ctx) -> None:
         states={
             NAME: [
                 CallbackQueryHandler(step_name, pattern=f"^{KEEP_CB}$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, step_name),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_name),
             ],
             BASE_URL: [
                 CallbackQueryHandler(step_base_url, pattern=f"^{KEEP_CB}$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, step_base_url),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_base_url),
             ],
             SECURE_PATH: [
                 CallbackQueryHandler(step_secure_path, pattern=f"^{KEEP_CB}$"),
                 MessageHandler(
-                    filters.TEXT & ~filters.COMMAND, step_secure_path
+                    NON_MENU_TEXT_FILTER, step_secure_path
                 ),
             ],
             EMAIL: [
                 CallbackQueryHandler(step_email, pattern=f"^{KEEP_CB}$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, step_email),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_email),
             ],
             PASSWORD: [
                 CallbackQueryHandler(step_password, pattern=f"^{KEEP_CB}$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, step_password),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_password),
             ],
             CONFIRM: [
                 CallbackQueryHandler(
@@ -459,7 +461,10 @@ def register(application, ctx) -> None:
                 ),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cmd_cancel),
+            MessageHandler(ANY_MENU_TEXT_FILTER, cmd_cancel),
+        ],
         name="editpanel",
         persistent=False,
     )

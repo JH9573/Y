@@ -24,7 +24,14 @@ from ..db import crud
 from ..db.models import Server
 from ..services.v2node import INSTALLED_CHECK_CMD
 from ..services.v2node_config import read_remote_nodes
-from .common import get_ctx
+from .common import (
+    ANY_MENU_TEXT_FILTER,
+    MENU_SERVER_ADD,
+    NON_MENU_TEXT_FILTER,
+    cancel_only_kb,
+    get_ctx,
+    server_menu_kb,
+)
 
 
 log = logging.getLogger(__name__)
@@ -40,8 +47,9 @@ KEY = "addserver"
 async def cmd_addserver(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data[KEY] = {}
     await update.effective_message.reply_text(
-        "开始添加服务器。任意时候可发送 /cancel 中止。\n\n"
-        "请输入服务器别名(例如 香港-1):"
+        "开始添加服务器。任意时候可点「❌ 取消」或发送 /cancel 中止。\n\n"
+        "请输入服务器别名(例如 香港-1):",
+        reply_markup=cancel_only_kb(),
     )
     return NAME
 
@@ -179,7 +187,8 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not ok:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="SSH 连通性测试失败,服务器未登记。请检查地址、端口、用户名、凭据后重试 /addserver。",
+            text="SSH 连通性测试失败,服务器未登记。请检查地址、端口、用户名、凭据后重试。",
+            reply_markup=server_menu_kb(),
         )
         context.user_data.pop(KEY, None)
         return ConversationHandler.END
@@ -250,29 +259,39 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         text = f"✅ 服务器「{server_name}」已添加,已导入 {imported} 个节点。"
 
-    await context.bot.send_message(chat_id=chat_id, text=text)
+    await context.bot.send_message(
+        chat_id=chat_id, text=text, reply_markup=server_menu_kb(),
+    )
     context.user_data.pop(KEY, None)
     return ConversationHandler.END
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop(KEY, None)
-    await update.effective_message.reply_text("已取消添加服务器。")
+    await update.effective_message.reply_text(
+        "已取消添加服务器。", reply_markup=server_menu_kb(),
+    )
     return ConversationHandler.END
 
 
 def register(application, ctx) -> None:
     conv = ConversationHandler(
-        entry_points=[CommandHandler("addserver", cmd_addserver)],
+        entry_points=[
+            CommandHandler("addserver", cmd_addserver),
+            MessageHandler(filters.Text([MENU_SERVER_ADD]), cmd_addserver),
+        ],
         states={
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_name)],
-            HOST: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_host)],
-            PORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_port)],
-            USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_username)],
+            NAME: [MessageHandler(NON_MENU_TEXT_FILTER, step_name)],
+            HOST: [MessageHandler(NON_MENU_TEXT_FILTER, step_host)],
+            PORT: [MessageHandler(NON_MENU_TEXT_FILTER, step_port)],
+            USERNAME: [MessageHandler(NON_MENU_TEXT_FILTER, step_username)],
             AUTH_TYPE: [CallbackQueryHandler(step_auth_type, pattern=r"^auth:(key|password)$")],
-            CREDENTIAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_credential)],
+            CREDENTIAL: [MessageHandler(NON_MENU_TEXT_FILTER, step_credential)],
         },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cmd_cancel),
+            MessageHandler(ANY_MENU_TEXT_FILTER, cmd_cancel),
+        ],
         name="addserver",
         persistent=False,
     )

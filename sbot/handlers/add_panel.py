@@ -28,7 +28,14 @@ from ..services.v2board_api import (
     validate_email,
     validate_secure_path,
 )
-from .common import get_ctx
+from .common import (
+    ANY_MENU_TEXT_FILTER,
+    MENU_PANEL_ADD,
+    NON_MENU_TEXT_FILTER,
+    cancel_only_kb,
+    get_ctx,
+    panel_menu_kb,
+)
 
 
 log = logging.getLogger(__name__)
@@ -42,8 +49,9 @@ KEY = "addpanel"
 async def cmd_addpanel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data[KEY] = {}
     await update.effective_message.reply_text(
-        "开始添加面板。任意时候可发送 /cancel 中止。\n\n"
-        "请输入面板别名(例如 主站):"
+        "开始添加面板。任意时候可点「❌ 取消」或发送 /cancel 中止。\n\n"
+        "请输入面板别名(例如 主站):",
+        reply_markup=cancel_only_kb(),
     )
     return NAME
 
@@ -145,6 +153,7 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"❌ 面板登录失败,面板未登记:{exc}",
+            reply_markup=panel_menu_kb(),
         )
         context.user_data.pop(KEY, None)
         return ConversationHandler.END
@@ -238,8 +247,9 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         text=(
             f"✅ 面板「{panel_name}」已添加,登录测试通过。"
             f"{creds_tail}{sync_tail}\n"
-            f"使用 /panel 查看面板列表。"
+            f"点「📋 面板列表」或发 /panel 查看面板。"
         ),
+        reply_markup=panel_menu_kb(),
     )
     context.user_data.pop(KEY, None)
     return ConversationHandler.END
@@ -247,21 +257,29 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop(KEY, None)
-    await update.effective_message.reply_text("已取消添加面板。")
+    await update.effective_message.reply_text(
+        "已取消添加面板。", reply_markup=panel_menu_kb(),
+    )
     return ConversationHandler.END
 
 
 def register(application, ctx) -> None:
     conv = ConversationHandler(
-        entry_points=[CommandHandler("addpanel", cmd_addpanel)],
+        entry_points=[
+            CommandHandler("addpanel", cmd_addpanel),
+            MessageHandler(filters.Text([MENU_PANEL_ADD]), cmd_addpanel),
+        ],
         states={
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_name)],
-            BASE_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_base_url)],
-            SECURE_PATH: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_secure_path)],
-            EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_email)],
-            PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_password)],
+            NAME: [MessageHandler(NON_MENU_TEXT_FILTER, step_name)],
+            BASE_URL: [MessageHandler(NON_MENU_TEXT_FILTER, step_base_url)],
+            SECURE_PATH: [MessageHandler(NON_MENU_TEXT_FILTER, step_secure_path)],
+            EMAIL: [MessageHandler(NON_MENU_TEXT_FILTER, step_email)],
+            PASSWORD: [MessageHandler(NON_MENU_TEXT_FILTER, step_password)],
         },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cmd_cancel),
+            MessageHandler(ANY_MENU_TEXT_FILTER, cmd_cancel),
+        ],
         name="addpanel",
         persistent=False,
     )

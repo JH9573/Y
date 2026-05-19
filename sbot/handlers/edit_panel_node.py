@@ -29,9 +29,11 @@ from ..services.v2board_api import (
     v2node_to_db_row,
 )
 from .common import (
+    ANY_MENU_TEXT_FILTER,
     CB_PANEL_NODE_ADD,
     CB_PANEL_NODE_EDIT,
     CB_PANEL_NODES,
+    NON_MENU_TEXT_FILTER,
     get_ctx,
 )
 
@@ -782,20 +784,20 @@ def register(application, ctx) -> None:
         states={
             NAME: [
                 CallbackQueryHandler(step_name, pattern=f"^{KEEP_CB}$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, step_name),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_name),
             ],
             HOST: [
                 CallbackQueryHandler(step_host, pattern=f"^{KEEP_CB}$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, step_host),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_host),
             ],
             PORT: [
                 CallbackQueryHandler(step_port, pattern=f"^{KEEP_CB}$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, step_port),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_port),
             ],
             SERVER_PORT: [
                 CallbackQueryHandler(step_server_port, pattern=f"^{KEEP_CB}$"),
                 MessageHandler(
-                    filters.TEXT & ~filters.COMMAND, step_server_port
+                    NON_MENU_TEXT_FILTER, step_server_port
                 ),
             ],
             CIPHER: [
@@ -817,7 +819,7 @@ def register(application, ctx) -> None:
             ],
             RATE: [
                 CallbackQueryHandler(step_rate, pattern=f"^{KEEP_CB}$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, step_rate),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_rate),
             ],
             GROUPS: [
                 CallbackQueryHandler(
@@ -830,7 +832,7 @@ def register(application, ctx) -> None:
                     step_advanced_skip, pattern=r"^pnlsave:advskip$"
                 ),
                 MessageHandler(
-                    filters.TEXT & ~filters.COMMAND, step_advanced_text
+                    NON_MENU_TEXT_FILTER, step_advanced_text
                 ),
             ],
             CONFIRM: [
@@ -839,7 +841,10 @@ def register(application, ctx) -> None:
                 ),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cmd_cancel),
+            MessageHandler(ANY_MENU_TEXT_FILTER, cmd_cancel),
+        ],
         name="pnlsave",
         persistent=False,
     )

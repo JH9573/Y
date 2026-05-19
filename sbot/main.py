@@ -30,6 +30,7 @@ from .handlers import (
     edit_panel_node,
     install,
     logs,
+    menu,
     node,
     ops,
     panel,
@@ -134,6 +135,8 @@ def build_application() -> Application:
     edit_panel.register(application, ctx)
     edit_panel_node.register(application, ctx)
     logs.register(application, ctx)
+    # menu 必须放在所有 ConversationHandler 之后,确保对话 entry 先匹配
+    menu.register(application, ctx)
 
     _wrap_with_auth(application, cfg.allowed_user_ids)
     application.add_error_handler(_error_handler)
