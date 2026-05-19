@@ -17,7 +17,6 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
-    filters,
 )
 
 from ..db import crud
@@ -26,11 +25,11 @@ from ..services.v2node import INSTALLED_CHECK_CMD
 from ..services.v2node_config import read_remote_nodes
 from .common import (
     ANY_MENU_TEXT_FILTER,
-    MENU_SERVER_ADD,
+    CB_MENU_SRV_ADD,
     NON_MENU_TEXT_FILTER,
     cancel_only_kb,
     get_ctx,
-    server_menu_kb,
+    main_menu_kb,
 )
 
 
@@ -45,6 +44,8 @@ KEY = "addserver"
 
 
 async def cmd_addserver(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.callback_query:
+        await update.callback_query.answer()
     context.user_data[KEY] = {}
     await update.effective_message.reply_text(
         "开始添加服务器。任意时候可点「❌ 取消」或发送 /cancel 中止。\n\n"
@@ -188,7 +189,7 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await context.bot.send_message(
             chat_id=chat_id,
             text="SSH 连通性测试失败,服务器未登记。请检查地址、端口、用户名、凭据后重试。",
-            reply_markup=server_menu_kb(),
+            reply_markup=main_menu_kb(),
         )
         context.user_data.pop(KEY, None)
         return ConversationHandler.END
@@ -260,7 +261,7 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         text = f"✅ 服务器「{server_name}」已添加,已导入 {imported} 个节点。"
 
     await context.bot.send_message(
-        chat_id=chat_id, text=text, reply_markup=server_menu_kb(),
+        chat_id=chat_id, text=text, reply_markup=main_menu_kb(),
     )
     context.user_data.pop(KEY, None)
     return ConversationHandler.END
@@ -269,7 +270,7 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop(KEY, None)
     await update.effective_message.reply_text(
-        "已取消添加服务器。", reply_markup=server_menu_kb(),
+        "已取消添加服务器。", reply_markup=main_menu_kb(),
     )
     return ConversationHandler.END
 
@@ -278,7 +279,7 @@ def register(application, ctx) -> None:
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("addserver", cmd_addserver),
-            MessageHandler(filters.Text([MENU_SERVER_ADD]), cmd_addserver),
+            CallbackQueryHandler(cmd_addserver, pattern=f"^{CB_MENU_SRV_ADD}$"),
         ],
         states={
             NAME: [MessageHandler(NON_MENU_TEXT_FILTER, step_name)],
