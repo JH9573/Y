@@ -50,10 +50,14 @@ log = logging.getLogger(__name__)
     TLS,
     NETWORK,
     RATE,
+    PARENT,
     GROUPS,
     ADVANCED,
     CONFIRM,
-) = range(11)
+) = range(12)
+
+# 父节点选择按钮一屏最多展示这么多;v2board 一般够用
+PARENT_LIST_LIMIT = 30
 
 KEY = "pnlsave"
 
@@ -177,6 +181,7 @@ async def cb_edit_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     initial.setdefault("network", node.network or "tcp")
     initial.setdefault("rate", node.rate if node.rate is not None else "1")
     initial.setdefault("group_id", [])
+    initial.setdefault("parent_id", node.parent_id)
 
     context.user_data[KEY] = {
         "mode": "edit",
@@ -478,6 +483,91 @@ async def step_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await update.message.reply_text("rate 必须是 ≥0 的数字,请重新输入:")
             return RATE
     data["values"]["rate"] = rate
+    return await _prompt_parent(update, context)
+
+
+# ---------- step: PARENT ----------
+
+async def _prompt_parent(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    data = context.user_data[KEY]
+    panel_id = data["panel_id"]
+    self_node_id = data.get("node_id")
+
+    async with crud.session() as s:
+        nodes = await crud.list_panel_nodes(s, panel_id)
+
+    # 编辑时排除自己,避免自指
+    candidates = [n for n in nodes if n.node_id != self_node_id]
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for n in candidates[:PARENT_LIST_LIMIT]:
+        relay = "🔁" if n.parent_id else ""
+        show = "✅" if n.show else "❌"
+        label = f"{show}{relay} #{n.node_id} {n.name}"
+        rows.append([InlineKeyboardButton(
+            label, callback_data=f"pnlsave:p:{n.node_id}"
+        )])
+
+    rows.append([InlineKeyboardButton(
+        "🚫 不选父节点", callback_data="pnlsave:p:none"
+    )])
+    if _is_edit(context):
+        current = data["initial"].get("parent_id")
+        label = (
+            f"保留 (#{current})" if current not in (None, "", 0)
+            else "保留 (无)"
+        )
+        rows.append([InlineKeyboardButton(label, callback_data=KEEP_CB)])
+
+    lines = ["请选择父节点(用于中转节点),也可点「🚫 不选父节点」跳过:"]
+    if not candidates:
+        lines.append("")
+        lines.append("(本地暂无其他节点,可直接「不选父节点」)")
+    elif len(candidates) > PARENT_LIST_LIMIT:
+        lines.append("")
+        lines.append(
+            f"(共 {len(candidates)} 个,仅显示前 {PARENT_LIST_LIMIT};"
+            "如需更精确请用「跳过」并在高级 JSON 中填写 parent_id。)"
+        )
+
+    await _reply(
+        update, "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows)
+    )
+    return PARENT
+
+
+async def step_parent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    data = context.user_data[KEY]
+
+    if query.data == KEEP_CB:
+        initial = data["initial"].get("parent_id")
+        parent_id: int | None
+        if initial in (None, "", 0):
+            parent_id = None
+        else:
+            try:
+                parent_id = int(initial)
+            except (TypeError, ValueError):
+                parent_id = None
+    else:
+        token = query.data.split(":", 2)[2]
+        if token == "none":
+            parent_id = None
+        else:
+            try:
+                parent_id = int(token)
+            except ValueError:
+                await query.message.reply_text("无效的父节点选择,请重选:")
+                return PARENT
+            if parent_id == data.get("node_id"):
+                await query.answer("不能选择自身作为父节点", show_alert=True)
+                return PARENT
+
+    data["values"]["parent_id"] = parent_id
     return await _prompt_groups(update, context)
 
 
@@ -655,6 +745,7 @@ def _compose_payload(data: dict) -> dict[str, Any]:
         "network": v["network"],
         "rate": v["rate"],
         "group_id": v["group_id"],
+        "parent_id": v.get("parent_id"),
     })
     payload.update(v.get("advanced") or {})
     payload.setdefault("disable_sni", 0)
@@ -667,14 +758,14 @@ def _summarize(data: dict) -> str:
     lines = ["请确认提交字段:", ""]
     for key in (
         "protocol", "name", "host", "port", "server_port",
-        "cipher", "tls", "network", "rate", "group_id",
+        "cipher", "tls", "network", "rate", "group_id", "parent_id",
     ):
         lines.append(f"{key}: {payload.get(key)}")
     extras = {
         k: v for k, v in payload.items()
         if k not in {
             "protocol", "name", "host", "port", "server_port",
-            "cipher", "tls", "network", "rate", "group_id",
+            "cipher", "tls", "network", "rate", "group_id", "parent_id",
         }
     }
     if extras:
@@ -820,6 +911,12 @@ def register(application, ctx) -> None:
             RATE: [
                 CallbackQueryHandler(step_rate, pattern=f"^{KEEP_CB}$"),
                 MessageHandler(NON_MENU_TEXT_FILTER, step_rate),
+            ],
+            PARENT: [
+                CallbackQueryHandler(
+                    step_parent,
+                    pattern=r"^pnlsave:(p:(none|\d+)|keep)$",
+                ),
             ],
             GROUPS: [
                 CallbackQueryHandler(
