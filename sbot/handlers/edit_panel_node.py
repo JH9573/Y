@@ -547,13 +547,10 @@ async def step_net_settings_skip(
 ) -> int:
     query = update.callback_query
     await query.answer()
-    data = context.user_data[KEY]
-    if query.data == KEEP_CB:
-        # 保留 initial 的 network_settings,不写 values 即可
-        pass
-    else:
-        # 显式跳过:把空 dict 写进 values,会清空 payload 里的 network_settings
-        data["values"]["network_settings"] = {}
+    # 跳过 / 保留 都不向 values 写入 network_settings:
+    # - 新增:payload 不含该字段,由面板使用默认值
+    # - 编辑:沿用面板上当前值,不动
+    # 之前写 {} 会被 v2board (PHP) 解码成空数组 [] 入库,与按钮文案"不带该字段"不一致。
     return await _prompt_rate(update, context)
 
 
