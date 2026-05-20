@@ -88,6 +88,7 @@ SAVE_FIELDS = {
 KEEP_CB = "pnlsave:keep"
 HOST_PICK_CB = "pnlsave:hs:"  # pnlsave:hs:<server_id>
 HOST_MANUAL_CB = "pnlsave:hm"
+NS_CLEAR_CB = "pnlsave:nsclear"
 
 
 # ---------- 通用 helper ----------
@@ -532,11 +533,15 @@ async def _prompt_net_settings(
         buttons.append([InlineKeyboardButton(
             f"保留 ({_format_net_settings(current)})", callback_data=KEEP_CB
         )])
+        buttons.append([InlineKeyboardButton(
+            "🗑 清空 network_settings", callback_data=NS_CLEAR_CB
+        )])
 
     text = (
         f"可选:贴入 network_settings JSON(network = {net})。\n"
         f"示例:\n\n{sample}\n\n"
-        "点「跳过」表示不带该字段。"
+        "点「跳过」表示不带该字段;"
+        + ("「🗑 清空」会把面板上该字段显式置 null。" if _is_edit(context) else "")
     )
     await _reply(update, text, reply_markup=InlineKeyboardMarkup(buttons))
     return NET_SETTINGS
@@ -551,6 +556,16 @@ async def step_net_settings_skip(
     # - 新增:payload 不含该字段,由面板使用默认值
     # - 编辑:沿用面板上当前值,不动
     # 之前写 {} 会被 v2board (PHP) 解码成空数组 [] 入库,与按钮文案"不带该字段"不一致。
+    return await _prompt_rate(update, context)
+
+
+async def step_net_settings_clear(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """编辑模式:显式把 network_settings 置 null,让面板擦掉这个字段。"""
+    query = update.callback_query
+    await query.answer()
+    context.user_data[KEY]["values"]["network_settings"] = None
     return await _prompt_rate(update, context)
 
 
@@ -1058,6 +1073,9 @@ def register(application, ctx) -> None:
                 CallbackQueryHandler(
                     step_net_settings_skip,
                     pattern=r"^pnlsave:(nsskip|keep)$",
+                ),
+                CallbackQueryHandler(
+                    step_net_settings_clear, pattern=f"^{NS_CLEAR_CB}$"
                 ),
                 MessageHandler(
                     NON_MENU_TEXT_FILTER, step_net_settings_text
