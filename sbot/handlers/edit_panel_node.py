@@ -50,6 +50,7 @@ log = logging.getLogger(__name__)
     CIPHER,
     FLOW,
     TLS,
+    TLS_SETTINGS,
     NETWORK,
     NET_SETTINGS,
     UP_MBPS,
@@ -59,7 +60,7 @@ log = logging.getLogger(__name__)
     GROUPS,
     ADVANCED,
     CONFIRM,
-) = range(17)
+) = range(18)
 
 # 父节点选择按钮一屏最多展示这么多;v2board 一般够用
 PARENT_LIST_LIMIT = 30
@@ -83,7 +84,8 @@ CIPHER_OPTIONS = [
     "2022-blake3-aes-128-gcm",
     "2022-blake3-aes-256-gcm",
 ]
-TLS_OPTIONS: list[tuple[int, str]] = [(0, "关闭"), (1, "TLS")]
+# v2board 校验:tls ∈ {0, 1, 2}。1 = TLS, 2 = REALITY (vless 常用)
+TLS_OPTIONS: list[tuple[int, str]] = [(0, "关闭"), (1, "TLS"), (2, "REALITY")]
 # v2board 校验:network ∈ {tcp, ws, grpc, http, httpupgrade, xhttp}
 NETWORK_OPTIONS_SS: list[tuple[str, str]] = [("tcp", "tcp"), ("http", "http伪装")]
 NETWORK_OPTIONS_FULL: list[tuple[str, str]] = [
@@ -113,6 +115,8 @@ KEEP_CB = "pnlsave:keep"
 HOST_PICK_CB = "pnlsave:hs:"  # pnlsave:hs:<server_id>
 HOST_MANUAL_CB = "pnlsave:hm"
 NS_CLEAR_CB = "pnlsave:nsclear"
+TS_SKIP_CB = "pnlsave:tsskip"
+TS_CLEAR_CB = "pnlsave:tsclear"
 PROTOCOL_PICK_CB = "pnlsave:proto:"  # pnlsave:proto:<value>
 FLOW_PICK_CB = "pnlsave:flow:"  # pnlsave:flow:none | pnlsave:flow:vision
 UP_MBPS_SKIP_CB = "pnlsave:upskip"
@@ -125,22 +129,24 @@ DOWN_MBPS_SKIP_CB = "pnlsave:dnskip"
 _FLOW_BY_PROTOCOL: dict[str, list[str]] = {
     "shadowsocks": [
         "protocol", "name", "host", "port", "server_port",
-        "cipher", "tls", "network", "net_settings",
+        "cipher", "tls", "tls_settings", "network", "net_settings",
         "rate", "parent", "groups", "advanced", "confirm",
     ],
     "vless": [
         "protocol", "name", "host", "port", "server_port",
-        "flow", "tls", "network", "net_settings",
+        "flow", "tls", "tls_settings", "network", "net_settings",
         "rate", "parent", "groups", "advanced", "confirm",
     ],
+    # anytls / hysteria2 服务端会强制 tls=1,bot 不再让用户选,
+    # 但 tls_settings 仍然要给用户机会填(证书 / SNI / REALITY 等)。
     "anytls": [
         "protocol", "name", "host", "port", "server_port",
-        "network", "net_settings",
+        "tls_settings", "network", "net_settings",
         "rate", "parent", "groups", "advanced", "confirm",
     ],
     "hysteria2": [
         "protocol", "name", "host", "port", "server_port",
-        "up_mbps", "down_mbps",
+        "tls_settings", "up_mbps", "down_mbps",
         "rate", "parent", "groups", "advanced", "confirm",
     ],
 }
@@ -570,8 +576,8 @@ async def step_tls(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         tls = int(data["initial"].get("tls", 0))
     else:
         tls = int(query.data.split(":", 2)[2])
-    if tls not in (0, 1):
-        await query.message.reply_text("TLS 必须是 0 或 1。")
+    if tls not in (0, 1, 2):
+        await query.message.reply_text("TLS 必须是 0 / 1 / 2。")
         return TLS
     data["values"]["tls"] = tls
     return await _advance("tls", update, context)
@@ -721,6 +727,116 @@ async def step_net_settings_text(
         return NET_SETTINGS
     context.user_data[KEY]["values"]["network_settings"] = parsed
     return await _advance("net_settings", update, context)
+
+
+# ---------- step: TLS_SETTINGS ----------
+
+def _format_tls_settings(value: Any) -> str:
+    if value in (None, "", {}):
+        return "(空)"
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+async def _prompt_tls_settings(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    data = context.user_data[KEY]
+    protocol = data["values"].get("protocol", "shadowsocks")
+    # 当前 tls 值:vless / ss 走过 tls 选项,以 values 为准;anytls/hysteria2 服务端强制 1
+    tls = data["values"].get("tls")
+    if tls is None:
+        tls = 1 if protocol in ("anytls", "hysteria2") else int(data["initial"].get("tls", 0) or 0)
+
+    if tls == 2:
+        sample = (
+            "{\n"
+            '  "server_name": "www.cloudflare.com",\n'
+            '  "server_port": 443,\n'
+            '  "private_key": "...",\n'
+            '  "short_id": "..."\n'
+            "}"
+        )
+        hint = "tls=2 (REALITY)"
+    elif tls == 1:
+        sample = (
+            "{\n"
+            '  "server_name": "example.com",\n'
+            '  "allow_insecure": 0\n'
+            "}"
+        )
+        hint = "tls=1 (TLS)"
+    else:
+        sample = "{}"
+        hint = "tls=0 (未启用),通常不需要 tls_settings"
+
+    buttons = [[InlineKeyboardButton(
+        "跳过", callback_data=TS_SKIP_CB
+    )]]
+    if _is_edit(context):
+        current = data["initial"].get("tls_settings")
+        buttons.append([InlineKeyboardButton(
+            f"保留 ({_format_tls_settings(current)})", callback_data=KEEP_CB
+        )])
+        buttons.append([InlineKeyboardButton(
+            "🗑 清空 tls_settings", callback_data=TS_CLEAR_CB
+        )])
+
+    text = (
+        f"可选:贴入 tls_settings JSON({hint})。\n"
+        f"示例:\n\n{sample}\n\n"
+        "点「跳过」表示不带该字段;"
+        + ("「🗑 清空」会把面板上该字段显式置 null。" if _is_edit(context) else "")
+    )
+    await _reply(update, text, reply_markup=InlineKeyboardMarkup(buttons))
+    return TLS_SETTINGS
+
+
+async def step_tls_settings_skip(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    # 与 net_settings 同样语义:跳过 / 保留都不写 values,payload 不会带该字段
+    # (编辑模式 payload 从 initial 起步,自动保留原值)
+    return await _advance("tls_settings", update, context)
+
+
+async def step_tls_settings_clear(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """编辑模式:把 tls_settings 显式置 null,让面板擦掉这个字段。"""
+    query = update.callback_query
+    await query.answer()
+    context.user_data[KEY]["values"]["tls_settings"] = None
+    return await _advance("tls_settings", update, context)
+
+
+async def step_tls_settings_text(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    text = (update.message.text or "").strip()
+    if not text:
+        await update.message.reply_text(
+            "空白,请重新输入或点上一条消息的「跳过」:"
+        )
+        return TLS_SETTINGS
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        await update.message.reply_text(
+            f"JSON 解析失败:{exc}\n请重新输入:"
+        )
+        return TLS_SETTINGS
+    if not isinstance(parsed, dict):
+        await update.message.reply_text(
+            "tls_settings 必须是 JSON 对象,请重新输入:"
+        )
+        return TLS_SETTINGS
+    context.user_data[KEY]["values"]["tls_settings"] = parsed
+    return await _advance("tls_settings", update, context)
 
 
 # ---------- step: FLOW (vless) ----------
@@ -1178,6 +1294,8 @@ def _compose_payload(data: dict) -> dict[str, Any]:
         if "down_mbps" in v:
             payload["down_mbps"] = v["down_mbps"]
 
+    if "tls_settings" in v:
+        payload["tls_settings"] = v["tls_settings"]
     if "network_settings" in v:
         payload["network_settings"] = v["network_settings"]
     payload.update(v.get("advanced") or {})
@@ -1314,6 +1432,7 @@ _PROMPT_BY_FIELD: dict[str, Any] = {
     "cipher": _prompt_cipher,
     "flow": _prompt_flow,
     "tls": _prompt_tls,
+    "tls_settings": _prompt_tls_settings,
     "network": _prompt_network,
     "net_settings": _prompt_net_settings,
     "up_mbps": _prompt_up_mbps,
@@ -1380,7 +1499,19 @@ def register(application, ctx) -> None:
             ],
             TLS: [
                 CallbackQueryHandler(
-                    step_tls, pattern=r"^pnlsave:(t:[01]|keep)$"
+                    step_tls, pattern=r"^pnlsave:(t:[012]|keep)$"
+                ),
+            ],
+            TLS_SETTINGS: [
+                CallbackQueryHandler(
+                    step_tls_settings_skip,
+                    pattern=rf"^({TS_SKIP_CB}|{KEEP_CB})$",
+                ),
+                CallbackQueryHandler(
+                    step_tls_settings_clear, pattern=f"^{TS_CLEAR_CB}$"
+                ),
+                MessageHandler(
+                    NON_MENU_TEXT_FILTER, step_tls_settings_text
                 ),
             ],
             NETWORK: [
