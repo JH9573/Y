@@ -87,7 +87,7 @@ async def _render_node_list(
         kb = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton(
-                    "➕ 添加 shadowsocks",
+                    "➕ 添加节点",
                     callback_data=f"{CB_PANEL_NODE_ADD}{panel_id}",
                 )],
                 [InlineKeyboardButton(
@@ -123,7 +123,7 @@ async def _render_node_list(
 
     rows.append(
         [InlineKeyboardButton(
-            "➕ 添加 shadowsocks",
+            "➕ 添加节点",
             callback_data=f"{CB_PANEL_NODE_ADD}{panel_id}",
         )]
     )
@@ -205,7 +205,7 @@ async def _render_node_detail(
         ],
     ]
     action_row: list[InlineKeyboardButton] = []
-    if node.protocol == "shadowsocks":
+    if node.protocol in {"shadowsocks", "vless", "anytls", "hysteria2"}:
         action_row.append(InlineKeyboardButton(
             "✏️ 编辑",
             callback_data=f"{CB_PANEL_NODE_EDIT}{panel_id}:{node_id}",

@@ -42,25 +42,38 @@ log = logging.getLogger(__name__)
 
 
 (
+    PROTOCOL,
     NAME,
     HOST,
     PORT,
     SERVER_PORT,
     CIPHER,
+    FLOW,
     TLS,
     NETWORK,
     NET_SETTINGS,
+    UP_MBPS,
+    DOWN_MBPS,
     RATE,
     PARENT,
     GROUPS,
     ADVANCED,
     CONFIRM,
-) = range(13)
+) = range(17)
 
 # 父节点选择按钮一屏最多展示这么多;v2board 一般够用
 PARENT_LIST_LIMIT = 30
 
 KEY = "pnlsave"
+
+# v2board V2nodeController::save 接受的协议
+PROTOCOL_OPTIONS: list[tuple[str, str]] = [
+    ("shadowsocks", "Shadowsocks"),
+    ("vless", "VLESS"),
+    ("anytls", "AnyTLS"),
+    ("hysteria2", "Hysteria2"),
+]
+PROTOCOL_VALUES = {v for v, _ in PROTOCOL_OPTIONS}
 
 CIPHER_OPTIONS = [
     "aes-128-gcm",
@@ -71,9 +84,20 @@ CIPHER_OPTIONS = [
     "2022-blake3-aes-256-gcm",
 ]
 TLS_OPTIONS: list[tuple[int, str]] = [(0, "关闭"), (1, "TLS")]
-# shadowsocks 只有两种传输:原生 tcp 或 http 伪装
-NETWORK_OPTIONS: list[tuple[str, str]] = [("tcp", "tcp"), ("http", "http伪装")]
-NETWORK_VALUES = {v for v, _ in NETWORK_OPTIONS}
+# v2board 校验:network ∈ {tcp, ws, grpc, http, httpupgrade, xhttp}
+NETWORK_OPTIONS_SS: list[tuple[str, str]] = [("tcp", "tcp"), ("http", "http伪装")]
+NETWORK_OPTIONS_FULL: list[tuple[str, str]] = [
+    ("tcp", "tcp"),
+    ("ws", "ws"),
+    ("grpc", "grpc"),
+    ("http", "http"),
+    ("httpupgrade", "httpupgrade"),
+    ("xhttp", "xhttp"),
+]
+FLOW_OPTIONS: list[tuple[str, str]] = [
+    ("", "(无)"),
+    ("xtls-rprx-vision", "xtls-rprx-vision"),
+]
 
 # v2board V2nodeController::save 接受的字段白名单
 SAVE_FIELDS = {
@@ -89,6 +113,56 @@ KEEP_CB = "pnlsave:keep"
 HOST_PICK_CB = "pnlsave:hs:"  # pnlsave:hs:<server_id>
 HOST_MANUAL_CB = "pnlsave:hm"
 NS_CLEAR_CB = "pnlsave:nsclear"
+PROTOCOL_PICK_CB = "pnlsave:proto:"  # pnlsave:proto:<value>
+FLOW_PICK_CB = "pnlsave:flow:"  # pnlsave:flow:none | pnlsave:flow:vision
+UP_MBPS_SKIP_CB = "pnlsave:upskip"
+DOWN_MBPS_SKIP_CB = "pnlsave:dnskip"
+
+
+# ---------- 流程编排 ----------
+
+# 每种协议的字段顺序。`_advance(after, ...)` 据此决定下一步进哪个 _prompt_*。
+_FLOW_BY_PROTOCOL: dict[str, list[str]] = {
+    "shadowsocks": [
+        "protocol", "name", "host", "port", "server_port",
+        "cipher", "tls", "network", "net_settings",
+        "rate", "parent", "groups", "advanced", "confirm",
+    ],
+    "vless": [
+        "protocol", "name", "host", "port", "server_port",
+        "flow", "tls", "network", "net_settings",
+        "rate", "parent", "groups", "advanced", "confirm",
+    ],
+    "anytls": [
+        "protocol", "name", "host", "port", "server_port",
+        "network", "net_settings",
+        "rate", "parent", "groups", "advanced", "confirm",
+    ],
+    "hysteria2": [
+        "protocol", "name", "host", "port", "server_port",
+        "up_mbps", "down_mbps",
+        "rate", "parent", "groups", "advanced", "confirm",
+    ],
+}
+
+
+def _flow_for(data: dict) -> list[str]:
+    protocol = data["values"].get("protocol") or data["initial"].get("protocol") or "shadowsocks"
+    return _FLOW_BY_PROTOCOL.get(protocol, _FLOW_BY_PROTOCOL["shadowsocks"])
+
+
+async def _advance(
+    after_field: str, update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """跳到该协议下 after_field 的下一步。"""
+    data = context.user_data[KEY]
+    flow = _flow_for(data)
+    try:
+        idx = flow.index(after_field)
+    except ValueError:
+        idx = -1
+    next_field = flow[idx + 1] if idx + 1 < len(flow) else "confirm"
+    return await _PROMPT_BY_FIELD[next_field](update, context)
 
 
 # ---------- 通用 helper ----------
@@ -122,6 +196,55 @@ def _is_edit(context: ContextTypes.DEFAULT_TYPE) -> bool:
     return context.user_data[KEY]["mode"] == "edit"
 
 
+# ---------- step: PROTOCOL ----------
+
+async def _prompt_protocol(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """新增模式才走;编辑模式从 cb_edit_entry 已经把协议预置进 values。"""
+    data = context.user_data[KEY]
+    panel_name = data.get("panel_name", "")
+    rows = [
+        [InlineKeyboardButton(
+            label, callback_data=f"{PROTOCOL_PICK_CB}{value}"
+        )]
+        for value, label in PROTOCOL_OPTIONS
+    ]
+    text = (
+        f"在面板「{panel_name}」上添加 v2node 节点。\n"
+        "任意时刻可发送 /cancel 中止。\n\n"
+        "请选择节点协议:"
+    )
+    await _reply(update, text, reply_markup=InlineKeyboardMarkup(rows))
+    return PROTOCOL
+
+
+async def step_protocol(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    proto = query.data.split(":", 2)[2]
+    if proto not in PROTOCOL_VALUES:
+        await query.message.reply_text("无效的协议,请重新选择:")
+        return PROTOCOL
+    context.user_data[KEY]["values"]["protocol"] = proto
+    return await _advance("protocol", update, context)
+
+
+async def _prompt_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """add 模式协议选完后才用得到;edit 模式从 cb_edit_entry 已直接提示了名称。"""
+    data = context.user_data[KEY]
+    if _is_edit(context):
+        val = data["initial"].get("name", "")
+        await _reply(
+            update,
+            f"请输入节点名称(当前: {val}):",
+            reply_markup=_keep_kb(val),
+        )
+    else:
+        await _reply(update, "请输入节点名称:")
+    return NAME
+
+
 # ---------- 入口 ----------
 
 async def cb_add_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -141,13 +264,9 @@ async def cb_add_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         "node_id": None,
         "initial": {},
         "values": {},
+        "panel_name": panel.name,
     }
-    await query.edit_message_text(
-        f"在面板「{panel.name}」上添加 shadowsocks v2node 节点。\n"
-        "任意时刻可发送 /cancel 中止。\n\n"
-        "请输入节点名称:"
-    )
-    return NAME
+    return await _prompt_protocol(update, context)
 
 
 async def cb_edit_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -163,9 +282,9 @@ async def cb_edit_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if panel is None or node is None:
         await query.edit_message_text("面板或节点不存在。")
         return ConversationHandler.END
-    if node.protocol != "shadowsocks":
+    if node.protocol not in PROTOCOL_VALUES:
         await query.edit_message_text(
-            f"当前仅支持编辑 shadowsocks 协议,该节点为 {node.protocol}。"
+            f"当前不支持编辑协议 {node.protocol}。"
         )
         return ConversationHandler.END
 
@@ -178,6 +297,7 @@ async def cb_edit_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     # 用 raw_json 作为基线,补齐结构化字段以防 raw 缺失
     initial: dict[str, Any] = {k: v for k, v in raw.items() if k in SAVE_FIELDS}
+    initial.setdefault("protocol", node.protocol)
     initial.setdefault("name", node.name)
     initial.setdefault("host", node.host)
     initial.setdefault("port", node.port)
@@ -194,10 +314,12 @@ async def cb_edit_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         "panel_id": panel_id,
         "node_id": node_id,
         "initial": initial,
-        "values": {},
+        # 编辑模式协议固定,直接预置到 values 里,跳过 PROTOCOL 选择步骤
+        "values": {"protocol": node.protocol},
+        "panel_name": panel.name,
     }
     await query.edit_message_text(
-        f"编辑面板「{panel.name}」的 v2node #{node_id} (shadowsocks)。\n"
+        f"编辑面板「{panel.name}」的 v2node #{node_id} ({node.protocol})。\n"
         "任意时刻可发送 /cancel 中止;\n"
         "每步可点「保留 (xxx)」沿用当前值。\n\n"
         f"请输入节点名称(当前: {initial['name']}):",
@@ -222,7 +344,7 @@ async def step_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.effective_message.reply_text("名称过长(最多 128 字符):")
         return NAME
     data["values"]["name"] = text
-    return await _prompt_host(update, context)
+    return await _advance("name", update, context)
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -275,7 +397,7 @@ async def step_host_pick_server(
         return await _prompt_host(update, context)
     data = context.user_data[KEY]
     data["values"]["host"] = server.host
-    return await _prompt_port(update, context)
+    return await _advance("host", update, context)
 
 
 async def step_host_manual(
@@ -298,7 +420,7 @@ async def step_host(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.effective_message.reply_text("地址不能为空,请重新输入:")
         return HOST
     data["values"]["host"] = text
-    return await _prompt_port(update, context)
+    return await _advance("host", update, context)
 
 
 async def _prompt_port(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -343,7 +465,7 @@ async def step_port(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await update.message.reply_text("端口必须是 1-65535 的整数,请重新输入:")
             return PORT
     data["values"]["port"] = port
-    return await _prompt_server_port(update, context)
+    return await _advance("port", update, context)
 
 
 async def _prompt_server_port(
@@ -382,7 +504,7 @@ async def step_server_port(
             await update.message.reply_text("端口必须是 1-65535 的整数,请重新输入:")
             return SERVER_PORT
     data["values"]["server_port"] = port
-    return await _prompt_cipher(update, context)
+    return await _advance("server_port", update, context)
 
 
 # ---------- step: CIPHER ----------
@@ -418,7 +540,7 @@ async def step_cipher(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await query.message.reply_text("无效的加密方式,请重新选择:")
         return CIPHER
     data["values"]["cipher"] = cipher
-    return await _prompt_tls(update, context)
+    return await _advance("cipher", update, context)
 
 
 # ---------- step: TLS ----------
@@ -452,7 +574,7 @@ async def step_tls(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.message.reply_text("TLS 必须是 0 或 1。")
         return TLS
     data["values"]["tls"] = tls
-    return await _prompt_network(update, context)
+    return await _advance("tls", update, context)
 
 
 # ---------- step: NETWORK ----------
@@ -461,9 +583,10 @@ async def _prompt_network(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
     data = context.user_data[KEY]
+    options = _network_options_for(data)
     rows = [[
         InlineKeyboardButton(label, callback_data=f"pnlsave:n:{value}")
-        for value, label in NETWORK_OPTIONS
+        for value, label in options
     ]]
     if _is_edit(context):
         current = data["initial"].get("network", "tcp")
@@ -478,20 +601,26 @@ async def _prompt_network(
     return NETWORK
 
 
+def _network_options_for(data: dict) -> list[tuple[str, str]]:
+    protocol = data["values"].get("protocol", "shadowsocks")
+    return NETWORK_OPTIONS_SS if protocol == "shadowsocks" else NETWORK_OPTIONS_FULL
+
+
 async def step_network(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     data = context.user_data[KEY]
+    allowed = {v for v, _ in _network_options_for(data)}
     if query.data == KEEP_CB:
         # 兼容旧数据,保留路径直接信任 initial 值
         net = str(data["initial"].get("network", "tcp"))
     else:
         net = query.data.split(":", 2)[2]
-        if net not in NETWORK_VALUES:
+        if net not in allowed:
             await query.message.reply_text("无效的 network。")
             return NETWORK
     data["values"]["network"] = net
-    return await _prompt_net_settings(update, context)
+    return await _advance("network", update, context)
 
 
 # ---------- step: NET_SETTINGS ----------
@@ -556,7 +685,7 @@ async def step_net_settings_skip(
     # - 新增:payload 不含该字段,由面板使用默认值
     # - 编辑:沿用面板上当前值,不动
     # 之前写 {} 会被 v2board (PHP) 解码成空数组 [] 入库,与按钮文案"不带该字段"不一致。
-    return await _prompt_rate(update, context)
+    return await _advance("net_settings", update, context)
 
 
 async def step_net_settings_clear(
@@ -566,7 +695,7 @@ async def step_net_settings_clear(
     query = update.callback_query
     await query.answer()
     context.user_data[KEY]["values"]["network_settings"] = None
-    return await _prompt_rate(update, context)
+    return await _advance("net_settings", update, context)
 
 
 async def step_net_settings_text(
@@ -591,7 +720,124 @@ async def step_net_settings_text(
         )
         return NET_SETTINGS
     context.user_data[KEY]["values"]["network_settings"] = parsed
-    return await _prompt_rate(update, context)
+    return await _advance("net_settings", update, context)
+
+
+# ---------- step: FLOW (vless) ----------
+
+async def _prompt_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    data = context.user_data[KEY]
+    rows = [[
+        InlineKeyboardButton(
+            label, callback_data=f"{FLOW_PICK_CB}{'vision' if value else 'none'}"
+        )
+        for value, label in FLOW_OPTIONS
+    ]]
+    if _is_edit(context):
+        current = data["initial"].get("flow") or "(无)"
+        rows.append([
+            InlineKeyboardButton(f"保留 ({current})", callback_data=KEEP_CB),
+        ])
+    await _reply(
+        update, "请选择 VLESS flow:", reply_markup=InlineKeyboardMarkup(rows)
+    )
+    return FLOW
+
+
+async def step_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    data = context.user_data[KEY]
+    if query.data == KEEP_CB:
+        flow = str(data["initial"].get("flow") or "")
+    else:
+        token = query.data.split(":", 2)[2]
+        flow = "xtls-rprx-vision" if token == "vision" else ""
+    data["values"]["flow"] = flow
+    return await _advance("flow", update, context)
+
+
+# ---------- step: UP_MBPS / DOWN_MBPS (hysteria2) ----------
+
+def _parse_mbps(text: str) -> float | None:
+    try:
+        v = float(text)
+    except ValueError:
+        return None
+    if v < 0:
+        return None
+    return v
+
+
+async def _prompt_up_mbps(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    data = context.user_data[KEY]
+    rows = [[InlineKeyboardButton("跳过", callback_data=UP_MBPS_SKIP_CB)]]
+    if _is_edit(context):
+        val = data["initial"].get("up_mbps")
+        label = f"保留 ({val})" if val not in (None, "") else "保留 (空)"
+        rows.append([InlineKeyboardButton(label, callback_data=KEEP_CB)])
+    await _reply(
+        update,
+        "请输入服务端上行带宽 up_mbps(数字,单位 Mbps),或点「跳过」不带:",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+    return UP_MBPS
+
+
+async def step_up_mbps(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    data = context.user_data[KEY]
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        if query.data == KEEP_CB:
+            val = data["initial"].get("up_mbps")
+            if val not in (None, ""):
+                data["values"]["up_mbps"] = val
+        # 跳过:不写 values,payload 不带该字段
+        return await _advance("up_mbps", update, context)
+    mbps = _parse_mbps((update.message.text or "").strip())
+    if mbps is None:
+        await update.message.reply_text("up_mbps 必须是 ≥0 的数字,请重新输入:")
+        return UP_MBPS
+    data["values"]["up_mbps"] = mbps
+    return await _advance("up_mbps", update, context)
+
+
+async def _prompt_down_mbps(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    data = context.user_data[KEY]
+    rows = [[InlineKeyboardButton("跳过", callback_data=DOWN_MBPS_SKIP_CB)]]
+    if _is_edit(context):
+        val = data["initial"].get("down_mbps")
+        label = f"保留 ({val})" if val not in (None, "") else "保留 (空)"
+        rows.append([InlineKeyboardButton(label, callback_data=KEEP_CB)])
+    await _reply(
+        update,
+        "请输入服务端下行带宽 down_mbps(数字,单位 Mbps),或点「跳过」不带:",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+    return DOWN_MBPS
+
+
+async def step_down_mbps(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    data = context.user_data[KEY]
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        if query.data == KEEP_CB:
+            val = data["initial"].get("down_mbps")
+            if val not in (None, ""):
+                data["values"]["down_mbps"] = val
+        return await _advance("down_mbps", update, context)
+    mbps = _parse_mbps((update.message.text or "").strip())
+    if mbps is None:
+        await update.message.reply_text("down_mbps 必须是 ≥0 的数字,请重新输入:")
+        return DOWN_MBPS
+    data["values"]["down_mbps"] = mbps
+    return await _advance("down_mbps", update, context)
 
 
 # ---------- step: RATE ----------
@@ -636,7 +882,7 @@ async def step_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await update.message.reply_text("rate 必须是 ≥0 的数字,请重新输入:")
             return RATE
     data["values"]["rate"] = rate
-    return await _prompt_parent(update, context)
+    return await _advance("rate", update, context)
 
 
 # ---------- step: PARENT ----------
@@ -721,7 +967,7 @@ async def step_parent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 return PARENT
 
     data["values"]["parent_id"] = parent_id
-    return await _prompt_groups(update, context)
+    return await _advance("parent", update, context)
 
 
 # ---------- step: GROUPS ----------
@@ -799,7 +1045,7 @@ async def step_groups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             await query.answer("请至少选择一个权限组", show_alert=True)
             return GROUPS
         data["values"]["group_id"] = sorted(data["selected_groups"])
-        return await _prompt_advanced(update, context)
+        return await _advance("groups", update, context)
 
     gid = int(parts[2])
     if gid in data["selected_groups"]:
@@ -843,7 +1089,7 @@ async def step_advanced_skip(
     query = update.callback_query
     await query.answer()
     context.user_data[KEY]["values"]["advanced"] = {}
-    return await _prompt_confirm(update, context)
+    return await _advance("advanced", update, context)
 
 
 async def step_advanced_text(
@@ -870,36 +1116,68 @@ async def step_advanced_text(
         )
         return ADVANCED
     context.user_data[KEY]["values"]["advanced"] = adv
-    return await _prompt_confirm(update, context)
+    return await _advance("advanced", update, context)
 
 
 # ---------- step: CONFIRM ----------
 
 def _compose_payload(data: dict) -> dict[str, Any]:
-    """合成最终 save payload:基线 + 用户字段 + advanced。"""
+    """合成最终 save payload:基线 + 用户字段 + advanced。
+
+    v2board V2nodeController::save 的必填字段:group_id, name, host, port,
+    server_port, protocol, tls(0/1/2), network(tcp/ws/grpc/...), disable_sni,
+    rate。其他按协议特殊处理:
+      - shadowsocks: 带 cipher
+      - vless: 可选 flow
+      - anytls: 服务端会把 tls=0 强制成 1
+      - hysteria2: 服务端强制 tls=1,可选 up_mbps / down_mbps
+    """
+    v = data["values"]
+    protocol = v.get("protocol", "shadowsocks")
     if data["mode"] == "edit":
-        payload = {k: v for k, v in data["initial"].items() if k in SAVE_FIELDS}
+        payload = {k: v0 for k, v0 in data["initial"].items() if k in SAVE_FIELDS}
     else:
         payload = {
-            "protocol": "shadowsocks",
             "disable_sni": 0,
             "zero_rtt_handshake": 0,
             "show": 1,
         }
-    v = data["values"]
+
+    # 公共字段
     payload.update({
-        "protocol": "shadowsocks",
+        "protocol": protocol,
         "name": v["name"],
         "host": v["host"],
         "port": v["port"],
         "server_port": v["server_port"],
-        "cipher": v["cipher"],
-        "tls": v["tls"],
-        "network": v["network"],
         "rate": v["rate"],
         "group_id": v["group_id"],
         "parent_id": v.get("parent_id"),
     })
+
+    # 协议分支
+    if protocol == "shadowsocks":
+        payload["cipher"] = v["cipher"]
+        payload["tls"] = v["tls"]
+        payload["network"] = v["network"]
+    elif protocol == "vless":
+        payload["tls"] = v["tls"]
+        payload["network"] = v["network"]
+        if v.get("flow"):
+            payload["flow"] = v["flow"]
+        else:
+            payload.pop("flow", None)
+    elif protocol == "anytls":
+        payload["tls"] = 1  # 服务端会强制
+        payload["network"] = v["network"]
+    elif protocol == "hysteria2":
+        payload["tls"] = 1  # 服务端会强制
+        payload.setdefault("network", "tcp")  # v2board 校验 network 必填
+        if "up_mbps" in v:
+            payload["up_mbps"] = v["up_mbps"]
+        if "down_mbps" in v:
+            payload["down_mbps"] = v["down_mbps"]
+
     if "network_settings" in v:
         payload["network_settings"] = v["network_settings"]
     payload.update(v.get("advanced") or {})
@@ -910,18 +1188,27 @@ def _compose_payload(data: dict) -> dict[str, Any]:
 
 def _summarize(data: dict) -> str:
     payload = _compose_payload(data)
-    lines = ["请确认提交字段:", ""]
-    for key in (
+    base_keys = [
         "protocol", "name", "host", "port", "server_port",
-        "cipher", "tls", "network", "rate", "group_id", "parent_id",
-    ):
-        lines.append(f"{key}: {payload.get(key)}")
+        "tls", "network", "rate", "group_id", "parent_id",
+    ]
+    protocol = payload.get("protocol", "shadowsocks")
+    proto_keys: list[str] = {
+        "shadowsocks": ["cipher"],
+        "vless": ["flow"],
+        "anytls": [],
+        "hysteria2": ["up_mbps", "down_mbps"],
+    }.get(protocol, [])
+    show_keys = base_keys[:5] + proto_keys + base_keys[5:]
+
+    lines = ["请确认提交字段:", ""]
+    for key in show_keys:
+        if key in payload:
+            lines.append(f"{key}: {payload.get(key)}")
+
     extras = {
-        k: v for k, v in payload.items()
-        if k not in {
-            "protocol", "name", "host", "port", "server_port",
-            "cipher", "tls", "network", "rate", "group_id", "parent_id",
-        }
+        k: val for k, val in payload.items()
+        if k not in set(show_keys)
     }
     if extras:
         lines.append("")
@@ -1017,6 +1304,28 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+# `_advance` 通过 field 名查这个表跳到下一步。必须等所有 _prompt_* 都定义后再建。
+_PROMPT_BY_FIELD: dict[str, Any] = {
+    "protocol": _prompt_protocol,
+    "name": _prompt_name,
+    "host": _prompt_host,
+    "port": _prompt_port,
+    "server_port": _prompt_server_port,
+    "cipher": _prompt_cipher,
+    "flow": _prompt_flow,
+    "tls": _prompt_tls,
+    "network": _prompt_network,
+    "net_settings": _prompt_net_settings,
+    "up_mbps": _prompt_up_mbps,
+    "down_mbps": _prompt_down_mbps,
+    "rate": _prompt_rate,
+    "parent": _prompt_parent,
+    "groups": _prompt_groups,
+    "advanced": _prompt_advanced,
+    "confirm": _prompt_confirm,
+}
+
+
 def register(application, ctx) -> None:
     conv = ConversationHandler(
         entry_points=[
@@ -1028,6 +1337,11 @@ def register(application, ctx) -> None:
             ),
         ],
         states={
+            PROTOCOL: [
+                CallbackQueryHandler(
+                    step_protocol, pattern=rf"^{PROTOCOL_PICK_CB}\w+$"
+                ),
+            ],
             NAME: [
                 CallbackQueryHandler(step_name, pattern=f"^{KEEP_CB}$"),
                 MessageHandler(NON_MENU_TEXT_FILTER, step_name),
@@ -1058,6 +1372,12 @@ def register(application, ctx) -> None:
                     pattern=r"^pnlsave:(c:[a-z0-9\-]+|keep)$",
                 ),
             ],
+            FLOW: [
+                CallbackQueryHandler(
+                    step_flow,
+                    pattern=rf"^({FLOW_PICK_CB}(none|vision)|{KEEP_CB})$",
+                ),
+            ],
             TLS: [
                 CallbackQueryHandler(
                     step_tls, pattern=r"^pnlsave:(t:[01]|keep)$"
@@ -1066,7 +1386,9 @@ def register(application, ctx) -> None:
             NETWORK: [
                 CallbackQueryHandler(
                     step_network,
-                    pattern=r"^pnlsave:(n:(tcp|http)|keep)$",
+                    pattern=(
+                        r"^pnlsave:(n:(tcp|ws|grpc|http|httpupgrade|xhttp)|keep)$"
+                    ),
                 ),
             ],
             NET_SETTINGS: [
@@ -1080,6 +1402,20 @@ def register(application, ctx) -> None:
                 MessageHandler(
                     NON_MENU_TEXT_FILTER, step_net_settings_text
                 ),
+            ],
+            UP_MBPS: [
+                CallbackQueryHandler(
+                    step_up_mbps,
+                    pattern=rf"^({UP_MBPS_SKIP_CB}|{KEEP_CB})$",
+                ),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_up_mbps),
+            ],
+            DOWN_MBPS: [
+                CallbackQueryHandler(
+                    step_down_mbps,
+                    pattern=rf"^({DOWN_MBPS_SKIP_CB}|{KEEP_CB})$",
+                ),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_down_mbps),
             ],
             RATE: [
                 CallbackQueryHandler(step_rate, pattern=f"^{KEEP_CB}$"),
