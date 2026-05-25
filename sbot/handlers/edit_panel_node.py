@@ -50,7 +50,17 @@ log = logging.getLogger(__name__)
     CIPHER,
     FLOW,
     TLS,
-    TLS_SETTINGS,
+    # tls_settings 引导式子步骤
+    TS_SERVER_NAME,
+    TS_CERT_MODE,
+    TS_CERT_FILE,
+    TS_KEY_FILE,
+    TS_PROVIDER,
+    TS_DNS_ENV,
+    TS_DEST,
+    TS_PRIVATE_KEY,
+    TS_SHORT_ID,
+    TS_XVER,
     NETWORK,
     NET_SETTINGS,
     UP_MBPS,
@@ -60,7 +70,7 @@ log = logging.getLogger(__name__)
     GROUPS,
     ADVANCED,
     CONFIRM,
-) = range(18)
+) = range(27)
 
 # 父节点选择按钮一屏最多展示这么多;v2board 一般够用
 PARENT_LIST_LIMIT = 30
@@ -115,12 +125,24 @@ KEEP_CB = "pnlsave:keep"
 HOST_PICK_CB = "pnlsave:hs:"  # pnlsave:hs:<server_id>
 HOST_MANUAL_CB = "pnlsave:hm"
 NS_CLEAR_CB = "pnlsave:nsclear"
-TS_SKIP_CB = "pnlsave:tsskip"
-TS_CLEAR_CB = "pnlsave:tsclear"
 PROTOCOL_PICK_CB = "pnlsave:proto:"  # pnlsave:proto:<value>
 FLOW_PICK_CB = "pnlsave:flow:"  # pnlsave:flow:none | pnlsave:flow:vision
 UP_MBPS_SKIP_CB = "pnlsave:upskip"
 DOWN_MBPS_SKIP_CB = "pnlsave:dnskip"
+# tls_settings 引导
+TS_SKIP_CB = "pnlsave:tssk"  # 各文本子字段通用的「跳过」
+CERT_MODE_CB = "pnlsave:cm:"  # pnlsave:cm:<mode>
+XVER_CB = "pnlsave:xver:"  # pnlsave:xver:<0|1|2>
+
+# tls=1 时证书获取方式
+CERT_MODE_OPTIONS: list[tuple[str, str]] = [
+    ("http", "http"),
+    ("dns", "dns"),
+    ("self", "self"),
+    ("file", "file"),
+    ("none", "none"),
+]
+CERT_MODE_VALUES = {v for v, _ in CERT_MODE_OPTIONS}
 
 
 # ---------- 流程编排 ----------
@@ -551,11 +573,20 @@ async def step_cipher(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 # ---------- step: TLS ----------
 
+def _tls_options_for(data: dict) -> list[tuple[int, str]]:
+    """vless 必须在 TLS / REALITY 间二选一,不给「关闭」;其余给 关闭 / TLS。"""
+    protocol = data["values"].get("protocol", "shadowsocks")
+    if protocol == "vless":
+        return [(1, "TLS"), (2, "REALITY")]
+    return [(0, "关闭"), (1, "TLS")]
+
+
 async def _prompt_tls(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     data = context.user_data[KEY]
+    options = _tls_options_for(data)
     rows = [[
         InlineKeyboardButton(f"{label} ({v})", callback_data=f"pnlsave:t:{v}")
-        for v, label in TLS_OPTIONS
+        for v, label in options
     ]]
     if _is_edit(context):
         current = data["initial"].get("tls", 0)
@@ -563,7 +594,7 @@ async def _prompt_tls(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             InlineKeyboardButton(f"保留 ({current})", callback_data=KEEP_CB),
         ])
     await _reply(
-        update, "请选择 TLS:", reply_markup=InlineKeyboardMarkup(rows)
+        update, "请选择安全性:", reply_markup=InlineKeyboardMarkup(rows)
     )
     return TLS
 
@@ -572,12 +603,13 @@ async def step_tls(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     data = context.user_data[KEY]
+    allowed = {v for v, _ in _tls_options_for(data)}
     if query.data == KEEP_CB:
         tls = int(data["initial"].get("tls", 0))
     else:
         tls = int(query.data.split(":", 2)[2])
-    if tls not in (0, 1, 2):
-        await query.message.reply_text("TLS 必须是 0 / 1 / 2。")
+    if tls not in allowed:
+        await query.message.reply_text("无效的安全性选择,请重选:")
         return TLS
     data["values"]["tls"] = tls
     return await _advance("tls", update, context)
@@ -729,114 +761,294 @@ async def step_net_settings_text(
     return await _advance("net_settings", update, context)
 
 
-# ---------- step: TLS_SETTINGS ----------
+# ---------- step: TLS_SETTINGS(引导式) ----------
 
-def _format_tls_settings(value: Any) -> str:
-    if value in (None, "", {}):
-        return "(空)"
-    try:
-        return json.dumps(value, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return str(value)
+def _resolve_tls(data: dict) -> int:
+    """取当前生效的 tls 值。vless/ss 走过选项以 values 为准;
+    anytls/hysteria2 服务端强制 1。"""
+    tls = data["values"].get("tls")
+    if tls is not None:
+        return int(tls)
+    protocol = data["values"].get("protocol", "shadowsocks")
+    if protocol in ("anytls", "hysteria2"):
+        return 1
+    return int(data["initial"].get("tls", 0) or 0)
+
+
+def _ts_sequence(data: dict) -> list[str]:
+    """根据 tls 值(及已选的 cert_mode)算出 tls_settings 子字段顺序。"""
+    tls = _resolve_tls(data)
+    if tls == 2:  # REALITY
+        return ["dest", "server_name", "private_key", "short_id", "xver"]
+    if tls == 1:  # TLS
+        seq = ["server_name", "cert_mode"]
+        cert_mode = data.get("ts", {}).get("cert_mode")
+        if cert_mode in ("file", "self"):
+            seq += ["cert_file", "key_file"]
+        elif cert_mode == "dns":
+            seq += ["provider", "dns_env"]
+        return seq
+    return []  # tls=0:不配 tls_settings
+
+
+def _ts_skip_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("跳过", callback_data=TS_SKIP_CB)]]
+    )
 
 
 async def _prompt_tls_settings(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
+    """tls_settings 引导入口:按 tls 值进入对应子流程。"""
     data = context.user_data[KEY]
-    protocol = data["values"].get("protocol", "shadowsocks")
-    # 当前 tls 值:vless / ss 走过 tls 选项,以 values 为准;anytls/hysteria2 服务端强制 1
-    tls = data["values"].get("tls")
-    if tls is None:
-        tls = 1 if protocol in ("anytls", "hysteria2") else int(data["initial"].get("tls", 0) or 0)
-
-    if tls == 2:
-        sample = (
-            "{\n"
-            '  "server_name": "www.cloudflare.com",\n'
-            '  "server_port": 443,\n'
-            '  "private_key": "...",\n'
-            '  "short_id": "..."\n'
-            "}"
-        )
-        hint = "tls=2 (REALITY)"
-    elif tls == 1:
-        sample = (
-            "{\n"
-            '  "server_name": "example.com",\n'
-            '  "allow_insecure": 0\n'
-            "}"
-        )
-        hint = "tls=1 (TLS)"
+    tls = _resolve_tls(data)
+    initial_tls = int(data["initial"].get("tls", 0) or 0)
+    initial_ts = data["initial"].get("tls_settings")
+    # 编辑且 tls 没变,用现有值打底,逐项可改;否则从空开始
+    if _is_edit(context) and tls == initial_tls and isinstance(initial_ts, dict):
+        data["ts"] = dict(initial_ts)
     else:
-        sample = "{}"
-        hint = "tls=0 (未启用),通常不需要 tls_settings"
+        data["ts"] = {}
 
-    buttons = [[InlineKeyboardButton(
-        "跳过", callback_data=TS_SKIP_CB
-    )]]
-    if _is_edit(context):
-        current = data["initial"].get("tls_settings")
-        buttons.append([InlineKeyboardButton(
-            f"保留 ({_format_tls_settings(current)})", callback_data=KEEP_CB
-        )])
-        buttons.append([InlineKeyboardButton(
-            "🗑 清空 tls_settings", callback_data=TS_CLEAR_CB
-        )])
-
-    text = (
-        f"可选:贴入 tls_settings JSON({hint})。\n"
-        f"示例:\n\n{sample}\n\n"
-        "点「跳过」表示不带该字段;"
-        + ("「🗑 清空」会把面板上该字段显式置 null。" if _is_edit(context) else "")
-    )
-    await _reply(update, text, reply_markup=InlineKeyboardMarkup(buttons))
-    return TLS_SETTINGS
+    seq = _ts_sequence(data)
+    if not seq:  # tls=0
+        return await _advance("tls_settings", update, context)
+    return await _TS_PROMPT_BY_FIELD[seq[0]](update, context)
 
 
-async def step_tls_settings_skip(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+async def _ts_advance(
+    after_subfield: str, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    query = update.callback_query
-    await query.answer()
-    # 与 net_settings 同样语义:跳过 / 保留都不写 values,payload 不会带该字段
-    # (编辑模式 payload 从 initial 起步,自动保留原值)
-    return await _advance("tls_settings", update, context)
-
-
-async def step_tls_settings_clear(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> int:
-    """编辑模式:把 tls_settings 显式置 null,让面板擦掉这个字段。"""
-    query = update.callback_query
-    await query.answer()
-    context.user_data[KEY]["values"]["tls_settings"] = None
-    return await _advance("tls_settings", update, context)
-
-
-async def step_tls_settings_text(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> int:
-    text = (update.message.text or "").strip()
-    if not text:
-        await update.message.reply_text(
-            "空白,请重新输入或点上一条消息的「跳过」:"
-        )
-        return TLS_SETTINGS
+    data = context.user_data[KEY]
+    seq = _ts_sequence(data)
     try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
-        await update.message.reply_text(
-            f"JSON 解析失败:{exc}\n请重新输入:"
-        )
-        return TLS_SETTINGS
-    if not isinstance(parsed, dict):
-        await update.message.reply_text(
-            "tls_settings 必须是 JSON 对象,请重新输入:"
-        )
-        return TLS_SETTINGS
-    context.user_data[KEY]["values"]["tls_settings"] = parsed
+        idx = seq.index(after_subfield)
+    except ValueError:
+        idx = len(seq)
+    if idx + 1 < len(seq):
+        return await _TS_PROMPT_BY_FIELD[seq[idx + 1]](update, context)
+    return await _ts_finish(update, context)
+
+
+async def _ts_finish(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    data = context.user_data[KEY]
+    ts = {k: v for k, v in data.get("ts", {}).items() if v not in (None, "")}
+    if ts:
+        data["values"]["tls_settings"] = ts
+    data.pop("ts", None)
     return await _advance("tls_settings", update, context)
+
+
+def _ts_cur(data: dict, key: str) -> str:
+    val = data.get("ts", {}).get(key)
+    return str(val) if val not in (None, "") else ""
+
+
+async def _ts_text_prompt(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+    *, prompt: str, key: str, state: int,
+) -> int:
+    cur = _ts_cur(context.user_data[KEY], key)
+    suffix = f"(当前: {cur})" if cur else ""
+    await _reply(update, f"{prompt}{suffix},或点「跳过」:", reply_markup=_ts_skip_kb())
+    return state
+
+
+async def _ts_text_step(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+    *, key: str, after: str,
+) -> int:
+    """文本子字段通用处理:有输入则写入 ts[key],「跳过」按钮保持原值。"""
+    data = context.user_data[KEY]
+    if update.callback_query:  # 跳过
+        await update.callback_query.answer()
+    else:
+        val = (update.message.text or "").strip()
+        if val:
+            data["ts"][key] = val
+    return await _ts_advance(after, update, context)
+
+
+# server_name(TLS 与 REALITY 共用)
+
+async def _ts_prompt_server_name(update, context):
+    return await _ts_text_prompt(
+        update, context,
+        prompt="请输入 server_name / SNI 域名",
+        key="server_name", state=TS_SERVER_NAME,
+    )
+
+
+async def step_ts_server_name(update, context):
+    return await _ts_text_step(
+        update, context, key="server_name", after="server_name"
+    )
+
+
+# cert_mode(TLS)
+
+async def _ts_prompt_cert_mode(update, context):
+    rows = [[
+        InlineKeyboardButton(label, callback_data=f"{CERT_MODE_CB}{val}")
+        for val, label in CERT_MODE_OPTIONS
+    ]]
+    await _reply(
+        update,
+        "请选择证书获取方式 cert_mode:\n"
+        "http=ACME http 验证 / dns=ACME dns 验证 / self=自签 / "
+        "file=手动指定证书路径 / none=不自动签发",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+    return TS_CERT_MODE
+
+
+async def step_ts_cert_mode(update, context):
+    query = update.callback_query
+    await query.answer()
+    cm = query.data.split(":", 2)[2]
+    if cm not in CERT_MODE_VALUES:
+        await query.message.reply_text("无效的 cert_mode,请重选:")
+        return TS_CERT_MODE
+    context.user_data[KEY]["ts"]["cert_mode"] = cm
+    return await _ts_advance("cert_mode", update, context)
+
+
+# cert_file / key_file(cert_mode=file/self)
+
+async def _ts_prompt_cert_file(update, context):
+    return await _ts_text_prompt(
+        update, context, prompt="请输入证书文件路径 cert_file",
+        key="cert_file", state=TS_CERT_FILE,
+    )
+
+
+async def step_ts_cert_file(update, context):
+    return await _ts_text_step(
+        update, context, key="cert_file", after="cert_file"
+    )
+
+
+async def _ts_prompt_key_file(update, context):
+    return await _ts_text_prompt(
+        update, context, prompt="请输入私钥文件路径 key_file",
+        key="key_file", state=TS_KEY_FILE,
+    )
+
+
+async def step_ts_key_file(update, context):
+    return await _ts_text_step(
+        update, context, key="key_file", after="key_file"
+    )
+
+
+# provider / dns_env(cert_mode=dns)
+
+async def _ts_prompt_provider(update, context):
+    return await _ts_text_prompt(
+        update, context, prompt="请输入 DNS provider(如 cloudflare / aliyun)",
+        key="provider", state=TS_PROVIDER,
+    )
+
+
+async def step_ts_provider(update, context):
+    return await _ts_text_step(
+        update, context, key="provider", after="provider"
+    )
+
+
+async def _ts_prompt_dns_env(update, context):
+    return await _ts_text_prompt(
+        update, context,
+        prompt="请输入 dns_env(逗号分隔 KEY=VALUE,如 CF_Token=xxx,CF_Account_ID=yyy)",
+        key="dns_env", state=TS_DNS_ENV,
+    )
+
+
+async def step_ts_dns_env(update, context):
+    return await _ts_text_step(
+        update, context, key="dns_env", after="dns_env"
+    )
+
+
+# REALITY 专属:dest / private_key / short_id / xver
+
+async def _ts_prompt_dest(update, context):
+    return await _ts_text_prompt(
+        update, context,
+        prompt="请输入 dest 偷取握手的目标(如 www.cloudflare.com:443)",
+        key="dest", state=TS_DEST,
+    )
+
+
+async def step_ts_dest(update, context):
+    return await _ts_text_step(update, context, key="dest", after="dest")
+
+
+async def _ts_prompt_private_key(update, context):
+    return await _ts_text_prompt(
+        update, context, prompt="请输入 REALITY private_key",
+        key="private_key", state=TS_PRIVATE_KEY,
+    )
+
+
+async def step_ts_private_key(update, context):
+    return await _ts_text_step(
+        update, context, key="private_key", after="private_key"
+    )
+
+
+async def _ts_prompt_short_id(update, context):
+    return await _ts_text_prompt(
+        update, context, prompt="请输入 short_id",
+        key="short_id", state=TS_SHORT_ID,
+    )
+
+
+async def step_ts_short_id(update, context):
+    return await _ts_text_step(
+        update, context, key="short_id", after="short_id"
+    )
+
+
+async def _ts_prompt_xver(update, context):
+    cur = _ts_cur(context.user_data[KEY], "xver") or "0"
+    rows = [[
+        InlineKeyboardButton(str(i), callback_data=f"{XVER_CB}{i}")
+        for i in (0, 1, 2)
+    ]]
+    await _reply(
+        update,
+        f"请选择 xver(proxy protocol 版本,默认 0;当前: {cur}):",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+    return TS_XVER
+
+
+async def step_ts_xver(update, context):
+    query = update.callback_query
+    await query.answer()
+    token = query.data.split(":", 2)[2]
+    # node.go 里 xver 是 json:"xver,string",存成字符串
+    context.user_data[KEY]["ts"]["xver"] = token
+    return await _ts_advance("xver", update, context)
+
+
+# 子字段 -> prompt 映射(供 _ts_advance 用)
+_TS_PROMPT_BY_FIELD: dict[str, Any] = {
+    "server_name": _ts_prompt_server_name,
+    "cert_mode": _ts_prompt_cert_mode,
+    "cert_file": _ts_prompt_cert_file,
+    "key_file": _ts_prompt_key_file,
+    "provider": _ts_prompt_provider,
+    "dns_env": _ts_prompt_dns_env,
+    "dest": _ts_prompt_dest,
+    "private_key": _ts_prompt_private_key,
+    "short_id": _ts_prompt_short_id,
+    "xver": _ts_prompt_xver,
+}
 
 
 # ---------- step: FLOW (vless) ----------
@@ -1502,16 +1714,60 @@ def register(application, ctx) -> None:
                     step_tls, pattern=r"^pnlsave:(t:[012]|keep)$"
                 ),
             ],
-            TLS_SETTINGS: [
+            TS_SERVER_NAME: [
                 CallbackQueryHandler(
-                    step_tls_settings_skip,
-                    pattern=rf"^({TS_SKIP_CB}|{KEEP_CB})$",
+                    step_ts_server_name, pattern=f"^{TS_SKIP_CB}$"
                 ),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_ts_server_name),
+            ],
+            TS_CERT_MODE: [
                 CallbackQueryHandler(
-                    step_tls_settings_clear, pattern=f"^{TS_CLEAR_CB}$"
+                    step_ts_cert_mode, pattern=rf"^{CERT_MODE_CB}\w+$"
                 ),
-                MessageHandler(
-                    NON_MENU_TEXT_FILTER, step_tls_settings_text
+            ],
+            TS_CERT_FILE: [
+                CallbackQueryHandler(
+                    step_ts_cert_file, pattern=f"^{TS_SKIP_CB}$"
+                ),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_ts_cert_file),
+            ],
+            TS_KEY_FILE: [
+                CallbackQueryHandler(
+                    step_ts_key_file, pattern=f"^{TS_SKIP_CB}$"
+                ),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_ts_key_file),
+            ],
+            TS_PROVIDER: [
+                CallbackQueryHandler(
+                    step_ts_provider, pattern=f"^{TS_SKIP_CB}$"
+                ),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_ts_provider),
+            ],
+            TS_DNS_ENV: [
+                CallbackQueryHandler(
+                    step_ts_dns_env, pattern=f"^{TS_SKIP_CB}$"
+                ),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_ts_dns_env),
+            ],
+            TS_DEST: [
+                CallbackQueryHandler(step_ts_dest, pattern=f"^{TS_SKIP_CB}$"),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_ts_dest),
+            ],
+            TS_PRIVATE_KEY: [
+                CallbackQueryHandler(
+                    step_ts_private_key, pattern=f"^{TS_SKIP_CB}$"
+                ),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_ts_private_key),
+            ],
+            TS_SHORT_ID: [
+                CallbackQueryHandler(
+                    step_ts_short_id, pattern=f"^{TS_SKIP_CB}$"
+                ),
+                MessageHandler(NON_MENU_TEXT_FILTER, step_ts_short_id),
+            ],
+            TS_XVER: [
+                CallbackQueryHandler(
+                    step_ts_xver, pattern=rf"^{XVER_CB}[012]$"
                 ),
             ],
             NETWORK: [
