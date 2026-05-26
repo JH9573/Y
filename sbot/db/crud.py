@@ -109,6 +109,7 @@ async def update_server(
     server_id: int,
     *,
     name: Optional[str] = None,
+    host: Optional[str] = None,
     username: Optional[str] = None,
     port: Optional[int] = None,
     auth_type: Optional[str] = None,
@@ -120,6 +121,8 @@ async def update_server(
         return None
     if name is not None:
         server.name = name
+    if host is not None:
+        server.host = host
     if username is not None:
         server.username = username
     if port is not None:

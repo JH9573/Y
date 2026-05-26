@@ -34,22 +34,32 @@ from .server import _render_server_menu
 log = logging.getLogger(__name__)
 
 # 对话状态
-CHOOSE_FIELD, INPUT_NAME, INPUT_USERNAME, INPUT_PASSWORD, INPUT_PORT = range(5)
+(
+    CHOOSE_FIELD,
+    INPUT_NAME,
+    INPUT_HOST,
+    INPUT_USERNAME,
+    INPUT_PASSWORD,
+    INPUT_PORT,
+) = range(6)
 
 KEY = "editserver"
 
 # 字段选择按钮 callback
-CB_FIELD = "edsf:"  # edsf:name | edsf:username | edsf:password | edsf:port | edsf:back
+CB_FIELD = "edsf:"  # edsf:name | edsf:host | edsf:username | edsf:password | edsf:port | edsf:back
 
 
 def _field_menu_markup(server) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("改名称", callback_data=f"{CB_FIELD}name"),
-            InlineKeyboardButton("改端口", callback_data=f"{CB_FIELD}port"),
+            InlineKeyboardButton("改地址", callback_data=f"{CB_FIELD}host"),
         ],
         [
+            InlineKeyboardButton("改端口", callback_data=f"{CB_FIELD}port"),
             InlineKeyboardButton("改用户名", callback_data=f"{CB_FIELD}username"),
+        ],
+        [
             InlineKeyboardButton("改密码", callback_data=f"{CB_FIELD}password"),
         ],
         [InlineKeyboardButton("⬅ 返回服务器", callback_data=f"{CB_FIELD}back")],
@@ -107,6 +117,7 @@ async def cb_choose_field(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     field = query.data.split(":", 1)[1]
     prompts = {
         "name": ("请输入新的服务器别名:", INPUT_NAME),
+        "host": ("请输入新的服务器地址 (IP 或域名):", INPUT_HOST),
         "username": ("请输入新的 SSH 登录用户名:", INPUT_USERNAME),
         "port": ("请输入新的 SSH 端口 (1-65535):", INPUT_PORT),
         "password": (
@@ -171,6 +182,21 @@ async def step_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await s.commit()
     await _log_edit(update, server_id, f"name={name}")
     await update.message.reply_text(f"✅ 别名已改为「{name}」。")
+    return await _show_field_menu(update, context, new_message=True)
+
+
+async def step_host(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    host = (update.message.text or "").strip()
+    server_id = context.user_data[KEY]["server_id"]
+    if not host:
+        await update.message.reply_text("地址不能为空,请重新输入:")
+        return INPUT_HOST
+    async with crud.session() as s:
+        await crud.update_server(s, server_id, host=host)
+        await s.commit()
+    await _log_edit(update, server_id, f"host={host}")
+    await update.message.reply_text(f"✅ 地址已改为「{host}」,正在测试 SSH…")
+    await _test_and_notify(update, context, server_id)
     return await _show_field_menu(update, context, new_message=True)
 
 
@@ -263,11 +289,12 @@ def register(application, ctx) -> None:
             CHOOSE_FIELD: [
                 CallbackQueryHandler(
                     cb_choose_field,
-                    pattern=rf"^{CB_FIELD}(name|username|password|port)$",
+                    pattern=rf"^{CB_FIELD}(name|host|username|password|port)$",
                 ),
                 CallbackQueryHandler(cb_back, pattern=rf"^{CB_FIELD}back$"),
             ],
             INPUT_NAME: [MessageHandler(NON_MENU_TEXT_FILTER, step_name)],
+            INPUT_HOST: [MessageHandler(NON_MENU_TEXT_FILTER, step_host)],
             INPUT_USERNAME: [MessageHandler(NON_MENU_TEXT_FILTER, step_username)],
             INPUT_PASSWORD: [MessageHandler(NON_MENU_TEXT_FILTER, step_password)],
             INPUT_PORT: [MessageHandler(NON_MENU_TEXT_FILTER, step_port)],
