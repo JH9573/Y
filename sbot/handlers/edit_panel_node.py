@@ -1225,14 +1225,17 @@ async def _prompt_parent(
     async with crud.session() as s:
         nodes = await crud.list_panel_nodes(s, panel_id)
 
-    # 编辑时排除自己,避免自指
-    candidates = [n for n in nodes if n.node_id != self_node_id]
+    # 编辑时排除自己,避免自指;同时只保留本身没有父节点的,
+    # 不让中转链再往下套一层(已是子节点的不作为候选父节点)
+    candidates = [
+        n for n in nodes
+        if n.node_id != self_node_id and not n.parent_id
+    ]
 
     rows: list[list[InlineKeyboardButton]] = []
     for n in candidates[:PARENT_LIST_LIMIT]:
-        relay = "🔁" if n.parent_id else ""
         show = "✅" if n.show else "❌"
-        label = f"{show}{relay} #{n.node_id} {n.name}"
+        label = f"{show} #{n.node_id} {n.name}"
         rows.append([InlineKeyboardButton(
             label, callback_data=f"pnlsave:p:{n.node_id}"
         )])
@@ -1248,10 +1251,10 @@ async def _prompt_parent(
         )
         rows.append([InlineKeyboardButton(label, callback_data=KEEP_CB)])
 
-    lines = ["请选择父节点(用于中转节点),也可点「🚫 不选父节点」跳过:"]
+    lines = ["请选择父节点(用于中转节点,仅列出自身无父节点的),也可点「🚫 不选父节点」跳过:"]
     if not candidates:
         lines.append("")
-        lines.append("(本地暂无其他节点,可直接「不选父节点」)")
+        lines.append("(暂无可作父节点的节点,可直接「不选父节点」)")
     elif len(candidates) > PARENT_LIST_LIMIT:
         lines.append("")
         lines.append(
