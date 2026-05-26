@@ -104,6 +104,33 @@ async def update_server_status(s: AsyncSession, server_id: int, status: str) -> 
         server.status = status
 
 
+async def update_server(
+    s: AsyncSession,
+    server_id: int,
+    *,
+    name: Optional[str] = None,
+    username: Optional[str] = None,
+    port: Optional[int] = None,
+    auth_type: Optional[str] = None,
+    credential: Optional[str] = None,
+) -> Optional[Server]:
+    """更新服务器的可改字段;只更新传入的非 None 项。"""
+    server = await s.get(Server, server_id)
+    if server is None:
+        return None
+    if name is not None:
+        server.name = name
+    if username is not None:
+        server.username = username
+    if port is not None:
+        server.port = port
+    if auth_type is not None:
+        server.auth_type = auth_type
+    if credential is not None:
+        server.credential = credential
+    return server
+
+
 async def set_v2node_installed(
     s: AsyncSession, server_id: int, installed: bool
 ) -> None:
