@@ -38,6 +38,7 @@ CB_DEL_SERVER = "delsrv:"  # delsrv:<id>
 CB_DEL_SERVER_OK = "delsrvok:"  # delsrvok:<id>
 CB_EDIT_SERVER = "edsrv:"  # edsrv:<id> -> 修改服务器信息菜单
 CB_V2NODE_MENU = "v2nmenu:"  # v2nmenu:<id> -> v2node 管理子菜单
+CB_FW_OPEN = "fwopen:"  # fwopen:<server_id> -> 放行 v2node 监听端口
 CB_INSTALL_START = "inst:"  # inst:<id>
 CB_INSTALL_PANEL = "instp:"  # instp:<server_id>:<panel_id> -> 安装流程选面板后
 CB_INSTALL_NODE = "instn:"   # instn:<server_id>:<panel_id>:<node_id> -> 选节点后

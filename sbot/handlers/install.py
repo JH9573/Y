@@ -26,6 +26,7 @@ from .common import (
     CB_SERVER_PREFIX,
     get_ctx,
 )
+from .firewall import port_check_block
 
 
 log = logging.getLogger(__name__)
@@ -304,13 +305,19 @@ async def cb_install_do(
         )
         await s.commit()
 
-    kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(
-            "⬅ 返回菜单",
-            callback_data=f"{CB_SERVER_PREFIX}{server_id}",
-        )]]
+    back_btn = InlineKeyboardButton(
+        "⬅ 返回菜单", callback_data=f"{CB_SERVER_PREFIX}{server_id}"
     )
-    await query.edit_message_text(result_text, reply_markup=kb)
+    rows: list[list[InlineKeyboardButton]] = []
+    if success:
+        fw_text, fw_buttons = await port_check_block(ctx.ssh, server)
+        result_text = f"{result_text}\n\n{fw_text}"
+        if fw_buttons:
+            rows.append(fw_buttons)
+    rows.append([back_btn])
+    await query.edit_message_text(
+        result_text, reply_markup=InlineKeyboardMarkup(rows)
+    )
 
 
 def register(application, ctx) -> None:

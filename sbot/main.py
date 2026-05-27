@@ -29,6 +29,7 @@ from .handlers import (
     edit_panel,
     edit_panel_node,
     edit_server,
+    firewall,
     install,
     logs,
     menu,
@@ -129,6 +130,7 @@ def build_application() -> Application:
     add_panel.register(application, ctx)
     install.register(application, ctx)
     uninstall.register(application, ctx)
+    firewall.register(application, ctx)
     server.register(application, ctx)
     ops.register(application, ctx)
     node.register(application, ctx)
