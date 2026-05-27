@@ -19,6 +19,7 @@ from ..services.v2board_api import V2BoardAPIError, v2node_to_db_row
 from .common import (
     CB_PANEL_NODE,
     CB_PANEL_NODE_ADD,
+    CB_PANEL_NODE_COPY,
     CB_PANEL_NODE_DROP,
     CB_PANEL_NODE_DROP_OK,
     CB_PANEL_NODE_EDIT,
@@ -86,7 +87,7 @@ async def _render_node_list(
         kb = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton(
-                    "➕ 添加 shadowsocks",
+                    "➕ 添加节点",
                     callback_data=f"{CB_PANEL_NODE_ADD}{panel_id}",
                 )],
                 [InlineKeyboardButton(
@@ -122,7 +123,7 @@ async def _render_node_list(
 
     rows.append(
         [InlineKeyboardButton(
-            "➕ 添加 shadowsocks",
+            "➕ 添加节点",
             callback_data=f"{CB_PANEL_NODE_ADD}{panel_id}",
         )]
     )
@@ -203,13 +204,17 @@ async def _render_node_detail(
             ),
         ],
     ]
-    if node.protocol == "shadowsocks":
-        rows.append([
-            InlineKeyboardButton(
-                "✏️ 编辑",
-                callback_data=f"{CB_PANEL_NODE_EDIT}{panel_id}:{node_id}",
-            ),
-        ])
+    action_row: list[InlineKeyboardButton] = []
+    if node.protocol in {"shadowsocks", "vless", "anytls", "hysteria2"}:
+        action_row.append(InlineKeyboardButton(
+            "✏️ 编辑",
+            callback_data=f"{CB_PANEL_NODE_EDIT}{panel_id}:{node_id}",
+        ))
+    action_row.append(InlineKeyboardButton(
+        "📋 复制",
+        callback_data=f"{CB_PANEL_NODE_COPY}{panel_id}:{node_id}",
+    ))
+    rows.append(action_row)
     rows.append([
         InlineKeyboardButton(
             "⬅ 返回列表",
@@ -425,6 +430,68 @@ async def cb_node_drop_do(
         await query.edit_message_text(f"{prefix} {msg}", reply_markup=kb)
 
 
+# ---------- 复制 ----------
+
+async def cb_node_copy_do(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    _, payload = query.data.split(":", 1)
+    panel_id_s, node_id_s = payload.split(":", 1)
+    panel_id = int(panel_id_s)
+    node_id = int(node_id_s)
+    ctx = get_ctx(context)
+
+    async with crud.session() as s:
+        panel = await crud.get_panel(s, panel_id)
+        node = await crud.get_panel_node(s, panel_id, node_id)
+    if panel is None or node is None:
+        await query.edit_message_text("面板或节点不存在。")
+        return
+
+    try:
+        await ctx.v2board.copy_v2node(panel, node_id)
+        ok, msg = True, f"已复制 v2node #{node_id}「{node.name}」(副本默认下架)"
+    except V2BoardAPIError as exc:
+        ok, msg = False, str(exc)
+
+    # 复制接口不返回新 id,刷新本地缓存才能看到副本
+    sync_count: int | None = None
+    if ok:
+        try:
+            nodes = await ctx.v2board.get_v2nodes(panel)
+        except V2BoardAPIError as exc:
+            msg += f"\n⚠️ 但同步本地缓存失败:{exc}"
+        else:
+            items = [v2node_to_db_row(n) for n in nodes]
+            async with crud.session() as s:
+                sync_count = await crud.replace_panel_nodes(s, panel_id, items)
+                await s.commit()
+
+    async with crud.session() as s:
+        await crud.add_log(
+            s,
+            user_id=update.effective_user.id,
+            server_id=None,
+            action="panel.node.copy",
+            result="success" if ok else "failed",
+            detail=f"panel_id={panel_id}, node_id={node_id}: {msg}",
+        )
+        await s.commit()
+
+    prefix = "✅" if ok else "❌"
+    banner = f"{prefix} {msg}"
+    if ok:
+        if sync_count is not None:
+            banner += f"\n已同步 {sync_count} 个节点到本地缓存。"
+        await _render_node_list(update, context, panel_id, banner=banner)
+    else:
+        await _render_node_detail(
+            update, context, panel_id, node_id, banner=banner
+        )
+
+
 # ---------- 同步 ----------
 
 async def cb_sync_nodes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -506,6 +573,12 @@ def register(application, ctx) -> None:
         CallbackQueryHandler(
             cb_node_drop_do,
             pattern=f"^{CB_PANEL_NODE_DROP_OK}\\d+:\\d+$",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            cb_node_copy_do,
+            pattern=f"^{CB_PANEL_NODE_COPY}\\d+:\\d+$",
         )
     )
     application.add_handler(

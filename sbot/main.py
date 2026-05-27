@@ -28,6 +28,8 @@ from .handlers import (
     add_server,
     edit_panel,
     edit_panel_node,
+    edit_server,
+    firewall,
     install,
     logs,
     menu,
@@ -123,10 +125,12 @@ def build_application() -> Application:
     # 注册 handler。顺序无所谓,但 ConversationHandler 应先于其它 CallbackQueryHandler
     # 以确保它能优先消费进入对话的回调。
     add_server.register(application, ctx)
+    edit_server.register(application, ctx)
     add_node.register(application, ctx)
     add_panel.register(application, ctx)
     install.register(application, ctx)
     uninstall.register(application, ctx)
+    firewall.register(application, ctx)
     server.register(application, ctx)
     ops.register(application, ctx)
     node.register(application, ctx)

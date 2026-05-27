@@ -87,14 +87,35 @@ async def _detect_arch(ssh: SSHClient, server: Server) -> str:
     raise InstallError("arch", f"暂不支持的 CPU 架构: {machine}")
 
 
-async def _check_not_installed(ssh: SSHClient, server: Server) -> None:
-    """已安装则中止,避免覆盖。"""
-    res = await ssh.run(server, f"test -x {INSTALL_DIR}/v2node && echo yes || echo no")
-    if res.stdout.strip() == "yes":
-        raise InstallError(
-            "precheck",
-            f"{INSTALL_DIR}/v2node 已存在,服务器似乎已安装 v2node,拒绝覆盖",
-        )
+async def _precheck_and_clean_stale(ssh: SSHClient, server: Server) -> bool:
+    """检测前次失败安装遗留的状态;若存在则清理,以便重试。
+
+    本函数只在 bot 端已认定该服务器未安装(server.v2node_installed=False)的
+    路径下被调用,因此发现残留即视为前次安装中途失败的产物,直接清理。
+
+    返回 True 表示清理过残留,便于上层产出额外进度提示。
+    """
+    res = await ssh.run(
+        server,
+        f"test -e {INSTALL_DIR}/v2node -o -e {SYSTEMD_UNIT_PATH} -o -e {CONFIG_DIR} "
+        "&& echo yes || echo no",
+    )
+    if res.stdout.strip() != "yes":
+        return False
+    # 残留来自上一次失败的安装,清理后才能重新安装。允许每一步失败:
+    # 例如服务从未注册过则 stop / disable 会报错,不应阻塞重试。
+    cleanup = (
+        "systemctl stop v2node 2>/dev/null || true; "
+        "systemctl disable v2node 2>/dev/null || true; "
+        f"rm -f {SYSTEMD_UNIT_PATH}; "
+        "systemctl daemon-reload 2>/dev/null || true; "
+        f"rm -rf {INSTALL_DIR} {CONFIG_DIR}"
+    )
+    try:
+        await ssh.run(server, cleanup, check=True)
+    except SSHError as exc:
+        raise InstallError("precheck", f"清理上次失败安装的残留失败: {exc}") from exc
+    return True
 
 
 async def _ensure_deps(ssh: SSHClient, server: Server) -> str:
@@ -215,7 +236,12 @@ async def install_v2node(
 ) -> AsyncIterator[InstallProgress]:
     """执行完整安装流程,以异步生成器方式产出每一步的进度。"""
     yield InstallProgress("precheck", "检查目标服务器现有状态")
-    await _check_not_installed(ssh, server)
+    cleaned = await _precheck_and_clean_stale(ssh, server)
+    if cleaned:
+        yield InstallProgress(
+            "precheck",
+            "检测到上一次失败安装的残留,已清理(停止服务/移除 systemd 单元/删除安装目录与配置目录)",
+        )
 
     yield InstallProgress("arch", "识别 CPU 架构")
     arch = await _detect_arch(ssh, server)

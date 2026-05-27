@@ -15,11 +15,13 @@ from .common import (
     CB_BACK_SERVERS,
     CB_DEL_SERVER,
     CB_DEL_SERVER_OK,
+    CB_EDIT_SERVER,
     CB_INSTALL_START,
     CB_NODE_MENU,
     CB_OPS_PREFIX,
     CB_SERVER_PREFIX,
     CB_UNINSTALL_START,
+    CB_V2NODE_MENU,
     get_ctx,
     main_menu_kb,
 )
@@ -65,6 +67,15 @@ async def cb_open_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _render_server_menu(update, context, server_id, edit=True)
 
 
+async def cb_open_v2node_menu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    server_id = int(query.data.split(":", 1)[1])
+    await _render_v2node_menu(update, context, server_id)
+
+
 async def cb_back_servers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -107,6 +118,44 @@ async def _render_server_menu(
         f"v2node: {installed_text}"
     )
 
+    kb = [
+        [InlineKeyboardButton(
+            "🧩 v2node 管理", callback_data=f"{CB_V2NODE_MENU}{server.id}"
+        )],
+        [InlineKeyboardButton(
+            "✏️ 修改服务器信息", callback_data=f"{CB_EDIT_SERVER}{server.id}"
+        )],
+        [InlineKeyboardButton(
+            "🗑 删除服务器", callback_data=f"{CB_DEL_SERVER}{server.id}"
+        )],
+        [InlineKeyboardButton("⬅ 返回列表", callback_data=CB_BACK_SERVERS)],
+    ]
+    markup = InlineKeyboardMarkup(kb)
+
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(header, reply_markup=markup)
+    else:
+        await update.effective_message.reply_text(header, reply_markup=markup)
+
+
+async def _render_v2node_menu(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    server_id: int,
+) -> None:
+    async with crud.session() as s:
+        server = await crud.get_server(s, server_id)
+    if server is None:
+        if update.callback_query:
+            await update.callback_query.edit_message_text("服务器不存在(可能已被删除)。")
+        return
+
+    installed_text = "已安装" if server.v2node_installed else "未安装"
+    header = (
+        f"v2node 管理 — {server.name}\n"
+        f"v2node: {installed_text}"
+    )
+
     if server.v2node_installed:
         kb = [
             [
@@ -140,24 +189,12 @@ async def _render_server_menu(
                     callback_data=f"{CB_UNINSTALL_START}{server.id}",
                 ),
             ],
-            [
-                InlineKeyboardButton(
-                    "删除服务器", callback_data=f"{CB_DEL_SERVER}{server.id}"
-                ),
-            ],
         ]
     else:
         kb = [
-            [
-                InlineKeyboardButton(
-                    "安装 v2node", callback_data=f"{CB_INSTALL_START}{server.id}"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "删除服务器", callback_data=f"{CB_DEL_SERVER}{server.id}"
-                ),
-            ],
+            [InlineKeyboardButton(
+                "安装 v2node", callback_data=f"{CB_INSTALL_START}{server.id}"
+            )],
         ]
     # 顺便确保白名单 actions 都有(只做一次防御检查)
     for action in [
@@ -170,10 +207,12 @@ async def _render_server_menu(
     ]:
         assert action in ACTIONS
 
-    kb.append([InlineKeyboardButton("⬅ 返回列表", callback_data=CB_BACK_SERVERS)])
+    kb.append([InlineKeyboardButton(
+        "⬅ 返回服务器", callback_data=f"{CB_SERVER_PREFIX}{server.id}"
+    )])
     markup = InlineKeyboardMarkup(kb)
 
-    if edit and update.callback_query:
+    if update.callback_query:
         await update.callback_query.edit_message_text(header, reply_markup=markup)
     else:
         await update.effective_message.reply_text(header, reply_markup=markup)
@@ -242,6 +281,9 @@ def register(application, ctx) -> None:
     application.add_handler(CommandHandler("server", cmd_server_list))
     application.add_handler(
         CallbackQueryHandler(cb_open_server, pattern=f"^{CB_SERVER_PREFIX}\\d+$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(cb_open_v2node_menu, pattern=f"^{CB_V2NODE_MENU}\\d+$")
     )
     application.add_handler(
         CallbackQueryHandler(cb_back_servers, pattern=f"^{CB_BACK_SERVERS}$")

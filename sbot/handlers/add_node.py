@@ -29,6 +29,7 @@ from .common import (
     CB_NODE_MENU,
     get_ctx,
 )
+from .firewall import port_check_block
 
 
 log = logging.getLogger(__name__)
@@ -304,13 +305,17 @@ async def cb_addnode_do(
         await s.commit()
 
     prefix = "✅" if ok else "❌"
-    kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(
-            "⬅ 返回节点列表",
-            callback_data=f"{CB_NODE_MENU}{server_id}",
-        )]]
-    )
-    await query.edit_message_text(f"{prefix} {msg}", reply_markup=kb)
+    body = f"{prefix} {msg}"
+    rows: list[list[InlineKeyboardButton]] = []
+    if ok:
+        fw_text, fw_buttons = await port_check_block(ctx.ssh, server)
+        body = f"{body}\n\n{fw_text}"
+        if fw_buttons:
+            rows.append(fw_buttons)
+    rows.append([InlineKeyboardButton(
+        "⬅ 返回节点列表", callback_data=f"{CB_NODE_MENU}{server_id}",
+    )])
+    await query.edit_message_text(body, reply_markup=InlineKeyboardMarkup(rows))
 
 
 def register(application, ctx) -> None:

@@ -295,6 +295,17 @@ class V2BoardClient:
             json_body={"id": node_id},
         )
 
+    async def copy_v2node(self, panel: Panel, node_id: int) -> None:
+        """复制节点。面板会新建一份字段相同的副本(show=0,隐藏),不返回新 id。
+        调用方需要重新 get_v2nodes 才能拿到副本。
+        """
+        await self._request_admin(
+            panel,
+            "POST",
+            "server/v2node/copy",
+            json_body={"id": node_id},
+        )
+
     async def save_v2node(
         self,
         panel: Panel,
