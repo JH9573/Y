@@ -23,9 +23,13 @@ from .core.crypto import Crypto
 from .core.ssh import SSHClient
 from .db import crud
 from .handlers import (
+    add_dns_account,
     add_node,
     add_panel,
     add_server,
+    dns,
+    dns_record,
+    edit_dns_account,
     edit_panel,
     edit_panel_node,
     edit_server,
@@ -41,6 +45,7 @@ from .handlers import (
     uninstall,
 )
 from .handlers.common import AppContext, CTX_KEY
+from .services.cloudflare_api import CloudflareClient
 from .services.v2board_api import V2BoardClient
 
 
@@ -112,7 +117,14 @@ def build_application() -> Application:
     crypto = Crypto(cfg.cred_encryption_key)
     ssh_client = SSHClient(crypto, timeout=cfg.ssh_timeout)
     v2board_client = V2BoardClient(crypto, timeout=cfg.ssh_timeout)
-    ctx = AppContext(config=cfg, crypto=crypto, ssh=ssh_client, v2board=v2board_client)
+    cloudflare_client = CloudflareClient(crypto, timeout=cfg.ssh_timeout)
+    ctx = AppContext(
+        config=cfg,
+        crypto=crypto,
+        ssh=ssh_client,
+        v2board=v2board_client,
+        cloudflare=cloudflare_client,
+    )
 
     application = (
         ApplicationBuilder()
@@ -138,6 +150,11 @@ def build_application() -> Application:
     panel_node.register(application, ctx)
     edit_panel.register(application, ctx)
     edit_panel_node.register(application, ctx)
+    # DNS 管理(顺序:add/edit conversation 先注册,普通 callback 后)
+    add_dns_account.register(application, ctx)
+    edit_dns_account.register(application, ctx)
+    dns_record.register(application, ctx)
+    dns.register(application, ctx)
     logs.register(application, ctx)
     # menu 必须放在所有 ConversationHandler 之后,确保对话 entry 先匹配
     menu.register(application, ctx)
