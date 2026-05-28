@@ -431,7 +431,7 @@ async def _render_records(
     )
     if total_pages > 1:
         lines.append(f"第 {page} / {total_pages} 页")
-    lines.append("图例: ☁️ 已代理 / 🌫 仅 DNS")
+    lines.append("图例: ☁️ 已代理 / ❌ 仅 DNS")
 
     rows: list[list[InlineKeyboardButton]] = []
     if not records:
@@ -444,7 +444,7 @@ async def _render_records(
             rname = str(r.get("name") or "?")
             short_name = _shorten_name(rname, zone_name)
             proxied = bool(r.get("proxied"))
-            badge = "☁️" if proxied else ("🌫" if rtype in PROXYABLE_TYPES else "")
+            badge = "☁️" if proxied else ("❌" if rtype in PROXYABLE_TYPES else "")
             label = f"{rtype} {short_name}".strip()
             if badge:
                 label = f"{badge} {label}"
@@ -568,7 +568,7 @@ def _format_record(record: dict[str, Any], *, banner: str | None = None) -> str:
     lines.append(f"内容: {content}")
     lines.append(f"TTL: {ttl_label(ttl) if isinstance(ttl, int) else ttl}")
     if rtype in PROXYABLE_TYPES:
-        lines.append(f"代理: {'☁️ 已代理' if proxied else '🌫 仅 DNS'}")
+        lines.append(f"代理: {'☁️ 已代理' if proxied else '❌ 仅 DNS'}")
     if rtype == "MX" and prio is not None:
         lines.append(f"优先级: {prio}")
     comment = record.get("comment")

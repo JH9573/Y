@@ -408,7 +408,7 @@ async def _prompt_proxied(
                 callback_data=f"{CB_PROXIED}1",
             ),
             InlineKeyboardButton(
-                "🌫 仅 DNS" + (" ✅" if cur is False else ""),
+                "❌ 仅 DNS" + (" ✅" if cur is False else ""),
                 callback_data=f"{CB_PROXIED}0",
             ),
         ],
@@ -459,7 +459,7 @@ async def _show_confirm(
     if rtype == "MX":
         lines.append(f"优先级: {v.get('priority')}")
     if rtype in PROXYABLE_TYPES:
-        lines.append(f"代理: {'☁️ Proxied' if v.get('proxied') else '🌫 仅 DNS'}")
+        lines.append(f"代理: {'☁️ Proxied' if v.get('proxied') else '❌ 仅 DNS'}")
 
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ 提交", callback_data=CB_CONFIRM_OK),
