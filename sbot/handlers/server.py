@@ -35,7 +35,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "你好,这是 v2node 服务器管理 bot。\n\n"
         "用下方菜单按钮操作,也可继续使用斜杠命令:\n"
-        "/server  /addserver  /panel  /addpanel  /logs  /cancel"
+        "/server  /addserver  /panel  /addpanel  /logs  /update  /cancel"
     )
     await update.effective_message.reply_text(text, reply_markup=main_menu_kb())
 
