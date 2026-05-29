@@ -10,6 +10,7 @@ from telegram.ext import filters
 from ..config import Config
 from ..core.crypto import Crypto
 from ..core.ssh import SSHClient
+from ..services.cloudflare_api import CloudflareClient
 from ..services.v2board_api import V2BoardClient
 
 
@@ -21,6 +22,7 @@ class AppContext:
     crypto: Crypto
     ssh: SSHClient
     v2board: V2BoardClient
+    cloudflare: CloudflareClient
 
 
 CTX_KEY = "app_ctx"
@@ -73,6 +75,26 @@ CB_MENU_SRV_LIST = "msrvls"  # 进入服务器列表
 CB_MENU_SRV_ADD = "msrvad"   # 进入添加服务器对话
 CB_MENU_PNL_LIST = "mpnlls"  # 进入面板列表
 CB_MENU_PNL_ADD = "mpnlad"   # 进入添加面板对话
+CB_MENU_DNS_LIST = "mdnsls"  # 进入 DNS 账户列表
+CB_MENU_DNS_ADD = "mdnsad"   # 进入添加 DNS 账户对话
+
+# DNS 管理 ---- 账户层
+CB_DNS_ACCOUNT = "dnsa:"      # dnsa:<id> -> 账户详情
+CB_BACK_DNS_LIST = "back:dns"  # 返回 DNS 账户列表
+CB_EDIT_DNS_ACCOUNT = "dnsae:"   # dnsae:<id> -> 编辑账户
+CB_DEL_DNS_ACCOUNT = "dnsad:"    # dnsad:<id> -> 删除确认
+CB_DEL_DNS_ACCOUNT_OK = "dnsadok:"  # dnsadok:<id> -> 真正删除
+# DNS 管理 ---- zone 层(实时拉取,无本地缓存)
+CB_DNS_ZONES = "dnsz:"        # dnsz:<account_id>:<page> -> zones 列表
+CB_DNS_ZONE = "dnszd:"        # dnszd:<account_id>:<zone_id> -> 进入 zone(记录列表第 1 页)
+# DNS 管理 ---- 记录层(account_id/zone_id 从 user_data["dns_ctx"] 读)
+CB_DNS_RECORDS = "dnsrs:"     # dnsrs:<page> -> 记录列表分页
+CB_DNS_RECORD = "dnsr:"       # dnsr:<record_id> -> 记录详情
+CB_DNS_RECORD_DEL = "dnsrd:"     # dnsrd:<record_id> -> 删除确认
+CB_DNS_RECORD_DEL_OK = "dnsrdok:"  # dnsrdok:<record_id> -> 真正删除
+CB_DNS_RECORD_ADD = "dnsradd"     # 添加记录入口(无参数,从 user_data 取上下文)
+CB_DNS_RECORD_EDIT = "dnsre:"     # dnsre:<record_id> -> 编辑记录
+
 CB_NOOP = "noop"
 
 
@@ -104,11 +126,12 @@ def humanize_age(when: datetime | None) -> str:
 # 一级菜单(只在 reply keyboard 里出现)
 MENU_SERVER_GROUP = "🖥 服务器管理"
 MENU_PANEL_GROUP = "🎛 面板管理"
+MENU_DNS_GROUP = "🌐 DNS 管理"
 MENU_LOGS = "📜 操作日志"
 MENU_CANCEL = "❌ 取消"
 
 ALL_MENU_TEXTS: frozenset[str] = frozenset({
-    MENU_SERVER_GROUP, MENU_PANEL_GROUP, MENU_LOGS, MENU_CANCEL,
+    MENU_SERVER_GROUP, MENU_PANEL_GROUP, MENU_DNS_GROUP, MENU_LOGS, MENU_CANCEL,
 })
 
 # ConversationHandler 内部用,排除菜单按钮文本以免被 state 误吃
@@ -124,7 +147,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton(MENU_SERVER_GROUP), KeyboardButton(MENU_PANEL_GROUP)],
-            [KeyboardButton(MENU_LOGS)],
+            [KeyboardButton(MENU_DNS_GROUP), KeyboardButton(MENU_LOGS)],
             [KeyboardButton(MENU_CANCEL)],
         ],
         resize_keyboard=True,

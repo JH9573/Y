@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import (
 
 from datetime import datetime
 
-from .models import Base, Node, OperationLog, Panel, PanelNode, Server
+from .models import Base, DnsAccount, Node, OperationLog, Panel, PanelNode, Server
 
 
 _engine = None
@@ -374,6 +374,63 @@ async def latest_node_sync_at(
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+# ---------- dns accounts ----------
+
+async def list_dns_accounts(s: AsyncSession) -> list[DnsAccount]:
+    result = await s.execute(select(DnsAccount).order_by(DnsAccount.id))
+    return list(result.scalars().all())
+
+
+async def get_dns_account(s: AsyncSession, account_id: int) -> Optional[DnsAccount]:
+    return await s.get(DnsAccount, account_id)
+
+
+async def get_dns_account_by_name(
+    s: AsyncSession, name: str
+) -> Optional[DnsAccount]:
+    result = await s.execute(select(DnsAccount).where(DnsAccount.name == name))
+    return result.scalar_one_or_none()
+
+
+async def create_dns_account(
+    s: AsyncSession,
+    *,
+    provider: str,
+    name: str,
+    api_token: str,
+    email: str | None = None,
+) -> DnsAccount:
+    account = DnsAccount(
+        provider=provider,
+        name=name,
+        api_token=api_token,
+        email=email,
+    )
+    s.add(account)
+    await s.flush()
+    return account
+
+
+async def update_dns_account(
+    s: AsyncSession,
+    account_id: int,
+    **fields,
+) -> None:
+    allowed = {"name", "api_token", "email"}
+    account = await s.get(DnsAccount, account_id)
+    if account is None:
+        return
+    for key, value in fields.items():
+        if key in allowed:
+            setattr(account, key, value)
+
+
+async def delete_dns_account(s: AsyncSession, account_id: int) -> None:
+    account = await s.get(DnsAccount, account_id)
+    if account is not None:
+        await s.delete(account)
 
 
 # ---------- operation logs ----------

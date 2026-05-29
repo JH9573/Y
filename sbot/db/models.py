@@ -142,6 +142,32 @@ class PanelNode(Base):
     panel: Mapped[Panel] = relationship(back_populates="panel_nodes")
 
 
+class DnsAccount(Base):
+    """DNS 服务商账户。
+
+    provider 区分服务商('cloudflare' 等),目前只实现 cloudflare。
+    api_token 加密存储;email 仅 cloudflare 老式 Global Key 鉴权用得到,
+    现在用 API Token 模式时可为空,保留字段方便未来兼容。
+    """
+
+    __tablename__ = "dns_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="cloudflare")
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    email: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    api_token: Mapped[str] = mapped_column(Text, nullable=False)  # 加密存储
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
 class OperationLog(Base):
     __tablename__ = "operation_logs"
 

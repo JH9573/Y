@@ -61,6 +61,7 @@ log = logging.getLogger(__name__)
     TS_PRIVATE_KEY,
     TS_SHORT_ID,
     TS_XVER,
+    TS_ECH,
     NETWORK,
     NET_SETTINGS,
     UP_MBPS,
@@ -70,7 +71,7 @@ log = logging.getLogger(__name__)
     GROUPS,
     ADVANCED,
     CONFIRM,
-) = range(27)
+) = range(28)
 
 # 父节点选择按钮一屏最多展示这么多;v2board 一般够用
 PARENT_LIST_LIMIT = 30
@@ -133,6 +134,10 @@ DOWN_MBPS_SKIP_CB = "pnlsave:dnskip"
 TS_SKIP_CB = "pnlsave:tssk"  # 各文本子字段通用的「跳过」
 CERT_MODE_CB = "pnlsave:cm:"  # pnlsave:cm:<mode>
 XVER_CB = "pnlsave:xver:"  # pnlsave:xver:<0|1|2>
+ECH_CB = "pnlsave:ech:"  # pnlsave:ech:<off|cloudflare>
+
+# tls_settings.ech 取值(目前仅 vless + tls=1)。""=关闭(不写该字段)。
+ECH_OPTIONS: list[tuple[str, str]] = [("", "关闭"), ("cloudflare", "Cloudflare")]
 
 # tls=1 时证书获取方式
 CERT_MODE_OPTIONS: list[tuple[str, str]] = [
@@ -787,6 +792,9 @@ def _ts_sequence(data: dict) -> list[str]:
             seq += ["cert_file", "key_file"]
         elif cert_mode == "dns":
             seq += ["provider", "dns_env"]
+        # ECH 目前只对 vless 暴露
+        if data["values"].get("protocol") == "vless":
+            seq += ["ech"]
         return seq
     return []  # tls=0:不配 tls_settings
 
@@ -1036,6 +1044,35 @@ async def step_ts_xver(update, context):
     return await _ts_advance("xver", update, context)
 
 
+# ECH(Encrypted Client Hello,仅 vless + tls=1)
+
+async def _ts_prompt_ech(update, context):
+    cur = _ts_cur(context.user_data[KEY], "ech")
+    rows = [[
+        InlineKeyboardButton(
+            label + (" ✅" if val == cur else ""),
+            callback_data=f"{ECH_CB}{val or 'off'}",
+        )
+        for val, label in ECH_OPTIONS
+    ]]
+    await _reply(
+        update,
+        "请选择 ECH(Encrypted Client Hello)配置"
+        f"(当前: {cur or '关闭'}):",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+    return TS_ECH
+
+
+async def step_ts_ech(update, context):
+    query = update.callback_query
+    await query.answer()
+    token = query.data.split(":", 2)[2]
+    # off -> 空串,_ts_finish 会过滤掉,等价于不写 ech 字段(关闭)
+    context.user_data[KEY]["ts"]["ech"] = "" if token == "off" else token
+    return await _ts_advance("ech", update, context)
+
+
 # 子字段 -> prompt 映射(供 _ts_advance 用)
 _TS_PROMPT_BY_FIELD: dict[str, Any] = {
     "server_name": _ts_prompt_server_name,
@@ -1048,6 +1085,7 @@ _TS_PROMPT_BY_FIELD: dict[str, Any] = {
     "private_key": _ts_prompt_private_key,
     "short_id": _ts_prompt_short_id,
     "xver": _ts_prompt_xver,
+    "ech": _ts_prompt_ech,
 }
 
 
@@ -1771,6 +1809,11 @@ def register(application, ctx) -> None:
             TS_XVER: [
                 CallbackQueryHandler(
                     step_ts_xver, pattern=rf"^{XVER_CB}[012]$"
+                ),
+            ],
+            TS_ECH: [
+                CallbackQueryHandler(
+                    step_ts_ech, pattern=rf"^{ECH_CB}(off|cloudflare)$"
                 ),
             ],
             NETWORK: [

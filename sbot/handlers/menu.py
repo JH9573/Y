@@ -15,13 +15,16 @@ from telegram.ext import (
     filters,
 )
 
-from . import logs, panel, server
+from . import dns, logs, panel, server
 from .common import (
+    CB_MENU_DNS_ADD,
+    CB_MENU_DNS_LIST,
     CB_MENU_PNL_LIST,
     CB_MENU_SRV_LIST,
     CB_MENU_PNL_ADD,
     CB_MENU_SRV_ADD,
     MENU_CANCEL,
+    MENU_DNS_GROUP,
     MENU_LOGS,
     MENU_PANEL_GROUP,
     MENU_SERVER_GROUP,
@@ -58,6 +61,16 @@ async def show_panel_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.effective_message.reply_text("面板管理:", reply_markup=kb)
 
 
+async def show_dns_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 账户列表", callback_data=CB_MENU_DNS_LIST),
+            InlineKeyboardButton("➕ 添加账户", callback_data=CB_MENU_DNS_ADD),
+        ],
+    ])
+    await update.effective_message.reply_text("DNS 管理:", reply_markup=kb)
+
+
 async def cb_menu_server_list(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -72,6 +85,14 @@ async def cb_menu_panel_list(
     query = update.callback_query
     await query.answer()
     await panel.cmd_panel_list(update, context)
+
+
+async def cb_menu_dns_list(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    await dns.cmd_dns_list(update, context)
 
 
 async def cancel_outside_conv(
@@ -92,6 +113,9 @@ def register(application, ctx) -> None:
         MessageHandler(filters.Text([MENU_PANEL_GROUP]), show_panel_group)
     )
     application.add_handler(
+        MessageHandler(filters.Text([MENU_DNS_GROUP]), show_dns_group)
+    )
+    application.add_handler(
         MessageHandler(filters.Text([MENU_LOGS]), logs.cmd_logs)
     )
     application.add_handler(
@@ -103,4 +127,7 @@ def register(application, ctx) -> None:
     )
     application.add_handler(
         CallbackQueryHandler(cb_menu_panel_list, pattern=f"^{CB_MENU_PNL_LIST}$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(cb_menu_dns_list, pattern=f"^{CB_MENU_DNS_LIST}$")
     )
