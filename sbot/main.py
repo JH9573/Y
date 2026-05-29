@@ -43,6 +43,7 @@ from .handlers import (
     panel_node,
     server,
     uninstall,
+    update_bot,
 )
 from .handlers.common import AppContext, CTX_KEY
 from .services.cloudflare_api import CloudflareClient
@@ -156,6 +157,7 @@ def build_application() -> Application:
     dns_record.register(application, ctx)
     dns.register(application, ctx)
     logs.register(application, ctx)
+    update_bot.register(application, ctx)
     # menu 必须放在所有 ConversationHandler 之后,确保对话 entry 先匹配
     menu.register(application, ctx)
 

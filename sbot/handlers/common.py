@@ -95,6 +95,10 @@ CB_DNS_RECORD_DEL_OK = "dnsrdok:"  # dnsrdok:<record_id> -> 真正删除
 CB_DNS_RECORD_ADD = "dnsradd"     # 添加记录入口(无参数,从 user_data 取上下文)
 CB_DNS_RECORD_EDIT = "dnsre:"     # dnsre:<record_id> -> 编辑记录
 
+# 更新重启
+CB_UPDATE_CONFIRM = "updok"   # 二次确认后:拉取最新代码并重启
+CB_UPDATE_CANCEL = "updno"    # 取消更新
+
 CB_NOOP = "noop"
 
 
@@ -128,10 +132,12 @@ MENU_SERVER_GROUP = "🖥 服务器管理"
 MENU_PANEL_GROUP = "🎛 面板管理"
 MENU_DNS_GROUP = "🌐 DNS 管理"
 MENU_LOGS = "📜 操作日志"
+MENU_UPDATE = "🔄 更新重启"
 MENU_CANCEL = "❌ 取消"
 
 ALL_MENU_TEXTS: frozenset[str] = frozenset({
-    MENU_SERVER_GROUP, MENU_PANEL_GROUP, MENU_DNS_GROUP, MENU_LOGS, MENU_CANCEL,
+    MENU_SERVER_GROUP, MENU_PANEL_GROUP, MENU_DNS_GROUP, MENU_LOGS,
+    MENU_UPDATE, MENU_CANCEL,
 })
 
 # ConversationHandler 内部用,排除菜单按钮文本以免被 state 误吃
@@ -148,7 +154,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [
             [KeyboardButton(MENU_SERVER_GROUP), KeyboardButton(MENU_PANEL_GROUP)],
             [KeyboardButton(MENU_DNS_GROUP), KeyboardButton(MENU_LOGS)],
-            [KeyboardButton(MENU_CANCEL)],
+            [KeyboardButton(MENU_UPDATE), KeyboardButton(MENU_CANCEL)],
         ],
         resize_keyboard=True,
         is_persistent=True,
