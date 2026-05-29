@@ -109,6 +109,8 @@ async def _post_init(application: Application) -> None:
     cfg = application.bot_data[CTX_KEY].config
     await crud.init_db(cfg.db_url)
     log.info("bot 已就绪,授权用户 %s", sorted(cfg.allowed_user_ids))
+    # 若上次是通过「更新重启」退出的,回执一条「重启完成」
+    await update_bot.notify_restart_done(application)
 
 
 def build_application() -> Application:

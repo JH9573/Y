@@ -12,10 +12,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sys
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import TelegramError
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -24,7 +26,7 @@ from telegram.ext import (
     filters,
 )
 
-from ..config import ROOT_DIR
+from ..config import BACKUPS_DIR, ROOT_DIR
 from ..db import crud
 from .common import (
     CB_UPDATE_BRANCH,
@@ -43,6 +45,9 @@ log = logging.getLogger(__name__)
 REQUIREMENTS = ROOT_DIR / "requirements.txt"
 # git 仓库根目录(sbot 包的上一级)
 REPO = str(ROOT_DIR.parent)
+# 重启交接标记:旧进程退出前写入,新进程启动后据此回复「重启完成」。
+# 放在 .gitignore 覆盖的 backups 目录,reset --hard / checkout 不会动它。
+RESTART_MARKER = BACKUPS_DIR / ".restart.json"
 # 分支列表缓存键 & 列表上限(Telegram 键盘不宜过长)
 BRANCHES_KEY = "update_branches"
 MAX_BRANCHES = 30
@@ -278,6 +283,14 @@ async def _do_update(
         update, "bot.update", "success", f"{action}: {before_short} -> {after_short}"
     )
 
+    # 写交接标记:重启后由新进程把这条消息改写成「重启完成」
+    _write_restart_marker(
+        chat_id=query.message.chat_id,
+        message_id=query.message.message_id,
+        branch=branch,
+        commit=after_short,
+    )
+
     log.info("%s,%s -> %s,触发重启", action, before_short, after_short)
     # 触发 run_polling 退出 -> 进程结束 -> systemd 自动以新代码重新拉起
     context.application.stop_running()
@@ -311,6 +324,67 @@ def _read_requirements() -> str:
         return REQUIREMENTS.read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+# ---------- 重启交接:写标记 / 启动后回执 ----------
+
+def _write_restart_marker(chat_id: int, message_id: int, branch: str, commit: str) -> None:
+    try:
+        BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+        RESTART_MARKER.write_text(
+            json.dumps(
+                {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "branch": branch,
+                    "commit": commit,
+                }
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        log.exception("写重启标记失败")
+
+
+async def notify_restart_done(application) -> None:
+    """新进程启动时调用:若存在重启标记,则把原消息改写成「重启完成」。"""
+    if not RESTART_MARKER.exists():
+        return
+    try:
+        data = json.loads(RESTART_MARKER.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        log.warning("重启标记损坏,忽略")
+        _clear_restart_marker()
+        return
+
+    text = (
+        f"✅ bot 已重启完成。\n当前分支:{data.get('branch')} @ {data.get('commit')}"
+    )
+    chat_id = data.get("chat_id")
+    message_id = data.get("message_id")
+    try:
+        if chat_id and message_id:
+            await application.bot.edit_message_text(
+                text, chat_id=chat_id, message_id=message_id
+            )
+        elif chat_id:
+            await application.bot.send_message(chat_id, text)
+    except TelegramError:
+        # 原消息编辑失败(如过旧),退而发新消息
+        try:
+            if chat_id:
+                await application.bot.send_message(chat_id, text)
+        except TelegramError:
+            log.exception("发送重启完成回执失败")
+    finally:
+        _clear_restart_marker()
+
+
+def _clear_restart_marker() -> None:
+    try:
+        RESTART_MARKER.unlink(missing_ok=True)
+    except OSError:
+        log.exception("清理重启标记失败")
 
 
 def register(application, ctx) -> None:
