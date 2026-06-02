@@ -188,7 +188,9 @@ async def _download_and_extract(
         f"cp -f {tmp_dir}/v2node {INSTALL_DIR}/v2node && "
         f"chmod +x {INSTALL_DIR}/v2node && "
         f"cp -f {tmp_dir}/geoip.dat {CONFIG_DIR}/geoip.dat 2>/dev/null || true && "
-        f"cp -f {tmp_dir}/geosite.dat {CONFIG_DIR}/geosite.dat 2>/dev/null || true",
+        f"cp -f {tmp_dir}/geosite.dat {CONFIG_DIR}/geosite.dat 2>/dev/null || true && "
+        f"cp -f {tmp_dir}/geoip.dat {INSTALL_DIR}/geoip.dat 2>/dev/null || true && "
+        f"cp -f {tmp_dir}/geosite.dat {INSTALL_DIR}/geosite.dat 2>/dev/null || true",
         "deploy",
     )
     # 清理临时文件
