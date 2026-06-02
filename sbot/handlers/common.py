@@ -46,7 +46,6 @@ CB_INSTALL_PANEL = "instp:"  # instp:<server_id>:<panel_id> -> 安装流程选�
 CB_INSTALL_NODE = "instn:"   # instn:<server_id>:<panel_id>:<node_id> -> 选节点后
 CB_INSTALL_OK = "instok:"    # instok:<server_id>:<panel_id>:<node_id> -> 真正开装
 CB_UNINSTALL_START = "uninst:"  # uninst:<id>
-CB_FIX_GEODAT = "fixgeo:"  # 【临时】fixgeo:<id> -> 把 geo*.dat 从配置目录补到运行目录(后续删除)
 CB_NODE_MENU = "nodes:"  # nodes:<server_id>
 CB_NODE_ADD = "nodeadd:"  # nodeadd:<server_id>
 CB_NODE_DEL = "nodedel:"  # nodedel:<server_id>:<node_pk>

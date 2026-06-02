@@ -16,7 +16,6 @@ from .common import (
     CB_DEL_SERVER,
     CB_DEL_SERVER_OK,
     CB_EDIT_SERVER,
-    CB_FIX_GEODAT,  # 【临时】补齐 geo 数据,后续删除
     CB_INSTALL_START,
     CB_NODE_MENU,
     CB_OPS_PREFIX,
@@ -188,13 +187,6 @@ async def _render_v2node_menu(
                 InlineKeyboardButton(
                     "卸载 v2node",
                     callback_data=f"{CB_UNINSTALL_START}{server.id}",
-                ),
-            ],
-            # 【临时按钮 — 后续删除】补齐运行目录缺失的 geo 数据文件
-            [
-                InlineKeyboardButton(
-                    "🩹 补齐 geo 数据",
-                    callback_data=f"{CB_FIX_GEODAT}{server.id}",
                 ),
             ],
         ]
