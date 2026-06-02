@@ -34,6 +34,7 @@ from .handlers import (
     edit_panel_node,
     edit_server,
     firewall,
+    fix_geodat,  # 【临时】补齐 geo 数据,后续删除
     install,
     logs,
     menu,
@@ -144,6 +145,7 @@ def build_application() -> Application:
     add_node.register(application, ctx)
     add_panel.register(application, ctx)
     install.register(application, ctx)
+    fix_geodat.register(application, ctx)  # 【临时】补齐 geo 数据,后续删除
     uninstall.register(application, ctx)
     firewall.register(application, ctx)
     server.register(application, ctx)
