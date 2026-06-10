@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 import asyncssh
 
@@ -53,21 +54,63 @@ class SSHClient:
         self._crypto = crypto
         self._timeout = timeout
 
-    def _conn_kwargs(self, server: Server) -> dict:
+    def _base_kwargs(self, host: str, port: int, username: str,
+                     auth_type: str, credential: str) -> dict:
         kwargs: dict = {
-            "host": server.host,
-            "port": server.port,
-            "username": server.username,
+            "host": host,
+            "port": port,
+            "username": username,
             "known_hosts": None,  # 受控环境,不强制 known_hosts
             "connect_timeout": self._timeout,
         }
-        if server.auth_type == "key":
-            kwargs["client_keys"] = [server.credential]
-        elif server.auth_type == "password":
-            kwargs["password"] = self._crypto.decrypt(server.credential)
+        if auth_type == "key":
+            kwargs["client_keys"] = [credential]
+        elif auth_type == "password":
+            kwargs["password"] = self._crypto.decrypt(credential)
         else:
-            raise SSHError(f"未知 auth_type: {server.auth_type}")
+            raise SSHError(f"未知 auth_type: {auth_type}")
         return kwargs
+
+    def _conn_kwargs(self, server: Server) -> dict:
+        return self._base_kwargs(
+            server.host, server.port, server.username,
+            server.auth_type, server.credential,
+        )
+
+    def _jump_kwargs(self, server: Server) -> Optional[dict]:
+        if not server.jump_host:
+            return None
+        return self._base_kwargs(
+            server.jump_host,
+            server.jump_port or 22,
+            server.jump_username or "root",
+            server.jump_auth_type or "key",
+            server.jump_credential or "",
+        )
+
+    @asynccontextmanager
+    async def _connect(self, server: Server) -> AsyncIterator[asyncssh.SSHClientConnection]:
+        """建立到目标服务器的连接;配置了跳板机时先经跳板机建隧道。"""
+        jump_kwargs = self._jump_kwargs(server)
+        if jump_kwargs is None:
+            async with asyncssh.connect(**self._conn_kwargs(server)) as conn:
+                yield conn
+            return
+
+        try:
+            jump_conn = await asyncssh.connect(**jump_kwargs)
+        except asyncssh.Error as exc:
+            raise SSHError(f"跳板机连接失败 ({server.jump_host}): {exc}") from exc
+        except OSError as exc:
+            raise SSHError(f"跳板机网络错误 ({server.jump_host}): {exc}") from exc
+        try:
+            async with asyncssh.connect(
+                **self._conn_kwargs(server), tunnel=jump_conn
+            ) as conn:
+                yield conn
+        finally:
+            jump_conn.close()
+            await jump_conn.wait_closed()
 
     async def run(
         self,
@@ -81,9 +124,8 @@ class SSHClient:
 
         check=True 时,非零退出码会抛 SSHError。
         """
-        kwargs = self._conn_kwargs(server)
         try:
-            async with asyncssh.connect(**kwargs) as conn:
+            async with self._connect(server) as conn:
                 proc = await conn.run(command, timeout=timeout or self._timeout)
         except asyncssh.Error as exc:
             raise SSHError(f"SSH 连接 / 执行失败: {exc}") from exc
@@ -111,9 +153,8 @@ class SSHClient:
 
     async def read_file(self, server: Server, path: str) -> str:
         """通过 SFTP 读取远程文件全文。"""
-        kwargs = self._conn_kwargs(server)
         try:
-            async with asyncssh.connect(**kwargs) as conn:
+            async with self._connect(server) as conn:
                 async with conn.start_sftp_client() as sftp:
                     async with sftp.open(path, "r") as f:
                         return await f.read()
@@ -124,9 +165,8 @@ class SSHClient:
 
     async def write_file(self, server: Server, path: str, content: str) -> None:
         """通过 SFTP 写入远程文件(覆盖)。"""
-        kwargs = self._conn_kwargs(server)
         try:
-            async with asyncssh.connect(**kwargs) as conn:
+            async with self._connect(server) as conn:
                 async with conn.start_sftp_client() as sftp:
                     async with sftp.open(path, "w") as f:
                         await f.write(content)

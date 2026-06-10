@@ -33,6 +33,13 @@ class Server(Base):
     username: Mapped[str] = mapped_column(String(64), nullable=False)
     auth_type: Mapped[str] = mapped_column(String(16), nullable=False)  # key / password
     credential: Mapped[str] = mapped_column(Text, nullable=False)
+    # 跳板机(可选)。jump_host 为空表示直连;凭据语义同上:
+    # password 加密存储,key 存 bot 机器上的私钥路径。
+    jump_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    jump_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    jump_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    jump_auth_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    jump_credential: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     v2node_installed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(

@@ -30,6 +30,7 @@ async def init_db(db_url: str) -> None:
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_panels(conn)
+        await _migrate_servers(conn)
 
 
 async def _migrate_panels(conn) -> None:
@@ -47,6 +48,24 @@ async def _migrate_panels(conn) -> None:
         await conn.exec_driver_sql(
             "ALTER TABLE panels ADD COLUMN api_key TEXT"
         )
+
+
+async def _migrate_servers(conn) -> None:
+    """对老库补齐 servers 表的跳板机列。"""
+    result = await conn.exec_driver_sql("PRAGMA table_info(servers)")
+    cols = {row[1] for row in result.fetchall()}
+    pending = {
+        "jump_host": "VARCHAR(255)",
+        "jump_port": "INTEGER",
+        "jump_username": "VARCHAR(64)",
+        "jump_auth_type": "VARCHAR(16)",
+        "jump_credential": "TEXT",
+    }
+    for name, col_type in pending.items():
+        if name not in cols:
+            await conn.exec_driver_sql(
+                f"ALTER TABLE servers ADD COLUMN {name} {col_type}"
+            )
 
 
 def session() -> AsyncSession:
@@ -82,6 +101,11 @@ async def create_server(
     credential: str,
     v2node_installed: bool = False,
     status: str = "active",
+    jump_host: Optional[str] = None,
+    jump_port: Optional[int] = None,
+    jump_username: Optional[str] = None,
+    jump_auth_type: Optional[str] = None,
+    jump_credential: Optional[str] = None,
 ) -> Server:
     server = Server(
         name=name,
@@ -92,6 +116,11 @@ async def create_server(
         credential=credential,
         v2node_installed=v2node_installed,
         status=status,
+        jump_host=jump_host,
+        jump_port=jump_port,
+        jump_username=jump_username,
+        jump_auth_type=jump_auth_type,
+        jump_credential=jump_credential,
     )
     s.add(server)
     await s.flush()
@@ -131,6 +160,41 @@ async def update_server(
         server.auth_type = auth_type
     if credential is not None:
         server.credential = credential
+    return server
+
+
+async def set_server_jump(
+    s: AsyncSession,
+    server_id: int,
+    *,
+    host: str,
+    port: int,
+    username: str,
+    auth_type: str,
+    credential: str,
+) -> Optional[Server]:
+    """整体设置/覆盖跳板机信息。"""
+    server = await s.get(Server, server_id)
+    if server is None:
+        return None
+    server.jump_host = host
+    server.jump_port = port
+    server.jump_username = username
+    server.jump_auth_type = auth_type
+    server.jump_credential = credential
+    return server
+
+
+async def clear_server_jump(s: AsyncSession, server_id: int) -> Optional[Server]:
+    """移除跳板机配置,恢复直连。"""
+    server = await s.get(Server, server_id)
+    if server is None:
+        return None
+    server.jump_host = None
+    server.jump_port = None
+    server.jump_username = None
+    server.jump_auth_type = None
+    server.jump_credential = None
     return server
 
 

@@ -117,6 +117,10 @@ async def _render_server_menu(
         f"状态: {server.status}\n"
         f"v2node: {installed_text}"
     )
+    if server.jump_host:
+        header += (
+            f"\n跳板机: {server.jump_username}@{server.jump_host}:{server.jump_port}"
+        )
 
     kb = [
         [InlineKeyboardButton(
