@@ -15,7 +15,16 @@ from sqlalchemy.ext.asyncio import (
 
 from datetime import datetime
 
-from .models import Base, DnsAccount, Node, OperationLog, Panel, PanelNode, Server
+from .models import (
+    Base,
+    DnsAccount,
+    JumpHost,
+    Node,
+    OperationLog,
+    Panel,
+    PanelNode,
+    Server,
+)
 
 
 _engine = None
@@ -51,21 +60,57 @@ async def _migrate_panels(conn) -> None:
 
 
 async def _migrate_servers(conn) -> None:
-    """对老库补齐 servers 表的跳板机列。"""
+    """对老库补齐 servers 表的 jump_host_id 列。
+
+    早期版本曾把跳板机信息内嵌在 servers 表(jump_host 等 5 列);
+    若发现这些遗留列且有数据,则搬迁为 jump_hosts 独立记录并挂接外键,
+    然后清空遗留列(SQLite 不便 DROP COLUMN,留空即可)。
+    """
     result = await conn.exec_driver_sql("PRAGMA table_info(servers)")
     cols = {row[1] for row in result.fetchall()}
-    pending = {
-        "jump_host": "VARCHAR(255)",
-        "jump_port": "INTEGER",
-        "jump_username": "VARCHAR(64)",
-        "jump_auth_type": "VARCHAR(16)",
-        "jump_credential": "TEXT",
-    }
-    for name, col_type in pending.items():
-        if name not in cols:
-            await conn.exec_driver_sql(
-                f"ALTER TABLE servers ADD COLUMN {name} {col_type}"
+    if "jump_host_id" not in cols:
+        await conn.exec_driver_sql(
+            "ALTER TABLE servers ADD COLUMN jump_host_id INTEGER "
+            "REFERENCES jump_hosts(id) ON DELETE SET NULL"
+        )
+    if "jump_host" not in cols:
+        return
+
+    rows = (await conn.exec_driver_sql(
+        "SELECT id, jump_host, jump_port, jump_username, jump_auth_type, jump_credential "
+        "FROM servers WHERE jump_host IS NOT NULL"
+    )).fetchall()
+    # 相同连接信息只建一条 jump_hosts 记录
+    seen: dict[tuple, int] = {}
+    for server_id, host, port, username, auth_type, credential in rows:
+        sig = (host, port, username, auth_type, credential)
+        jump_id = seen.get(sig)
+        if jump_id is None:
+            name = f"{username}@{host}"
+            suffix = 1
+            while True:
+                hit = (await conn.exec_driver_sql(
+                    "SELECT id FROM jump_hosts WHERE name = ?", (name,)
+                )).fetchone()
+                if hit is None:
+                    break
+                suffix += 1
+                name = f"{username}@{host}-{suffix}"
+            cursor = await conn.exec_driver_sql(
+                "INSERT INTO jump_hosts (name, host, port, username, auth_type, credential) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (name, host, port or 22, username or "root", auth_type or "key", credential or ""),
             )
+            jump_id = cursor.lastrowid
+            seen[sig] = jump_id
+        await conn.exec_driver_sql(
+            "UPDATE servers SET jump_host_id = ? WHERE id = ?", (jump_id, server_id)
+        )
+    if rows:
+        await conn.exec_driver_sql(
+            "UPDATE servers SET jump_host = NULL, jump_port = NULL, "
+            "jump_username = NULL, jump_auth_type = NULL, jump_credential = NULL"
+        )
 
 
 def session() -> AsyncSession:
@@ -101,11 +146,7 @@ async def create_server(
     credential: str,
     v2node_installed: bool = False,
     status: str = "active",
-    jump_host: Optional[str] = None,
-    jump_port: Optional[int] = None,
-    jump_username: Optional[str] = None,
-    jump_auth_type: Optional[str] = None,
-    jump_credential: Optional[str] = None,
+    jump_host_id: Optional[int] = None,
 ) -> Server:
     server = Server(
         name=name,
@@ -116,11 +157,7 @@ async def create_server(
         credential=credential,
         v2node_installed=v2node_installed,
         status=status,
-        jump_host=jump_host,
-        jump_port=jump_port,
-        jump_username=jump_username,
-        jump_auth_type=jump_auth_type,
-        jump_credential=jump_credential,
+        jump_host_id=jump_host_id,
     )
     s.add(server)
     await s.flush()
@@ -163,39 +200,92 @@ async def update_server(
     return server
 
 
-async def set_server_jump(
+async def set_server_jump_host(
+    s: AsyncSession, server_id: int, jump_host_id: Optional[int]
+) -> Optional[Server]:
+    """设置服务器使用的跳板机;传 None 表示直连。"""
+    server = await s.get(Server, server_id)
+    if server is None:
+        return None
+    server.jump_host_id = jump_host_id
+    return server
+
+
+# ---------- jump hosts ----------
+
+async def list_jump_hosts(s: AsyncSession) -> list[JumpHost]:
+    result = await s.execute(select(JumpHost).order_by(JumpHost.id))
+    return list(result.scalars().all())
+
+
+async def get_jump_host(s: AsyncSession, jump_id: int) -> Optional[JumpHost]:
+    return await s.get(JumpHost, jump_id)
+
+
+async def get_jump_host_by_name(s: AsyncSession, name: str) -> Optional[JumpHost]:
+    result = await s.execute(select(JumpHost).where(JumpHost.name == name))
+    return result.scalar_one_or_none()
+
+
+async def create_jump_host(
     s: AsyncSession,
-    server_id: int,
     *,
+    name: str,
     host: str,
     port: int,
     username: str,
     auth_type: str,
     credential: str,
-) -> Optional[Server]:
-    """整体设置/覆盖跳板机信息。"""
-    server = await s.get(Server, server_id)
-    if server is None:
-        return None
-    server.jump_host = host
-    server.jump_port = port
-    server.jump_username = username
-    server.jump_auth_type = auth_type
-    server.jump_credential = credential
-    return server
+) -> JumpHost:
+    jump = JumpHost(
+        name=name,
+        host=host,
+        port=port,
+        username=username,
+        auth_type=auth_type,
+        credential=credential,
+    )
+    s.add(jump)
+    await s.flush()
+    return jump
 
 
-async def clear_server_jump(s: AsyncSession, server_id: int) -> Optional[Server]:
-    """移除跳板机配置,恢复直连。"""
-    server = await s.get(Server, server_id)
-    if server is None:
+async def update_jump_host(
+    s: AsyncSession,
+    jump_id: int,
+    **fields,
+) -> Optional[JumpHost]:
+    """更新跳板机的任意已知字段。"""
+    allowed = {"name", "host", "port", "username", "auth_type", "credential"}
+    jump = await s.get(JumpHost, jump_id)
+    if jump is None:
         return None
-    server.jump_host = None
-    server.jump_port = None
-    server.jump_username = None
-    server.jump_auth_type = None
-    server.jump_credential = None
-    return server
+    for key, value in fields.items():
+        if key in allowed:
+            setattr(jump, key, value)
+    return jump
+
+
+async def servers_using_jump_host(
+    s: AsyncSession, jump_id: int
+) -> list[Server]:
+    result = await s.execute(
+        select(Server).where(Server.jump_host_id == jump_id).order_by(Server.id)
+    )
+    return list(result.scalars().all())
+
+
+async def delete_jump_host(s: AsyncSession, jump_id: int) -> None:
+    """删除跳板机;引用它的服务器恢复直连。
+
+    SQLite 默认不开启外键约束,ON DELETE SET NULL 不会生效,这里显式解除引用。
+    """
+    jump = await s.get(JumpHost, jump_id)
+    if jump is None:
+        return
+    for server in await servers_using_jump_host(s, jump_id):
+        server.jump_host_id = None
+    await s.delete(jump)
 
 
 async def set_v2node_installed(

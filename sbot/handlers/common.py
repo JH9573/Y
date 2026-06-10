@@ -77,6 +77,15 @@ CB_MENU_PNL_LIST = "mpnlls"  # 进入面板列表
 CB_MENU_PNL_ADD = "mpnlad"   # 进入添加面板对话
 CB_MENU_DNS_LIST = "mdnsls"  # 进入 DNS 账户列表
 CB_MENU_DNS_ADD = "mdnsad"   # 进入添加 DNS 账户对话
+CB_MENU_JUMP_LIST = "mjmpls"  # 进入跳板机列表
+
+# 跳板机管理
+CB_JUMP_PREFIX = "jmp:"      # jmp:<id> -> 跳板机详情
+CB_JUMP_ADD = "jmpadd"       # 进入添加跳板机对话
+CB_EDIT_JUMP = "edjmp:"      # edjmp:<id> -> 修改跳板机信息
+CB_DEL_JUMP = "deljmp:"      # deljmp:<id> -> 删除确认
+CB_DEL_JUMP_OK = "deljmpok:"  # deljmpok:<id> -> 真正删除
+CB_BACK_JUMPS = "back:jumps"  # 返回跳板机列表
 
 # DNS 管理 ---- 账户层
 CB_DNS_ACCOUNT = "dnsa:"      # dnsa:<id> -> 账户详情

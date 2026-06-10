@@ -19,6 +19,7 @@ from . import dns, logs, panel, server
 from .common import (
     CB_MENU_DNS_ADD,
     CB_MENU_DNS_LIST,
+    CB_MENU_JUMP_LIST,
     CB_MENU_PNL_LIST,
     CB_MENU_SRV_LIST,
     CB_MENU_PNL_ADD,
@@ -46,6 +47,9 @@ async def show_server_group(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         [
             InlineKeyboardButton("📋 服务器列表", callback_data=CB_MENU_SRV_LIST),
             InlineKeyboardButton("➕ 添加服务器", callback_data=CB_MENU_SRV_ADD),
+        ],
+        [
+            InlineKeyboardButton("🪜 跳板机管理", callback_data=CB_MENU_JUMP_LIST),
         ],
     ])
     await update.effective_message.reply_text("服务器管理:", reply_markup=kb)

@@ -78,14 +78,11 @@ class SSHClient:
         )
 
     def _jump_kwargs(self, server: Server) -> Optional[dict]:
-        if not server.jump_host:
+        jump = server.jump
+        if jump is None:
             return None
         return self._base_kwargs(
-            server.jump_host,
-            server.jump_port or 22,
-            server.jump_username or "root",
-            server.jump_auth_type or "key",
-            server.jump_credential or "",
+            jump.host, jump.port, jump.username, jump.auth_type, jump.credential
         )
 
     @asynccontextmanager
@@ -97,12 +94,13 @@ class SSHClient:
                 yield conn
             return
 
+        jump_label = f"{server.jump.name} {server.jump.host}"
         try:
             jump_conn = await asyncssh.connect(**jump_kwargs)
         except asyncssh.Error as exc:
-            raise SSHError(f"跳板机连接失败 ({server.jump_host}): {exc}") from exc
+            raise SSHError(f"跳板机连接失败 ({jump_label}): {exc}") from exc
         except OSError as exc:
-            raise SSHError(f"跳板机网络错误 ({server.jump_host}): {exc}") from exc
+            raise SSHError(f"跳板机网络错误 ({jump_label}): {exc}") from exc
         try:
             async with asyncssh.connect(
                 **self._conn_kwargs(server), tunnel=jump_conn
@@ -149,6 +147,21 @@ class SSHClient:
             res = await self.run(server, "true", timeout=self._timeout)
             return res.ok
         except SSHError:
+            return False
+
+    async def check_jump_connectivity(self, jump) -> bool:
+        """直接检测跳板机本身可否登录(登记/修改跳板机时用)。"""
+        try:
+            kwargs = self._base_kwargs(
+                jump.host, jump.port, jump.username, jump.auth_type, jump.credential
+            )
+        except SSHError:
+            return False
+        try:
+            async with asyncssh.connect(**kwargs) as conn:
+                proc = await conn.run("true", timeout=self._timeout)
+                return (proc.exit_status or 0) == 0
+        except (asyncssh.Error, OSError):
             return False
 
     async def read_file(self, server: Server, path: str) -> str:

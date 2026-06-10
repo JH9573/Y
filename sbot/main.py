@@ -24,17 +24,20 @@ from .core.ssh import SSHClient
 from .db import crud
 from .handlers import (
     add_dns_account,
+    add_jump_host,
     add_node,
     add_panel,
     add_server,
     dns,
     dns_record,
     edit_dns_account,
+    edit_jump_host,
     edit_panel,
     edit_panel_node,
     edit_server,
     firewall,
     install,
+    jump_host,
     logs,
     menu,
     node,
@@ -141,6 +144,9 @@ def build_application() -> Application:
     # 以确保它能优先消费进入对话的回调。
     add_server.register(application, ctx)
     edit_server.register(application, ctx)
+    add_jump_host.register(application, ctx)
+    edit_jump_host.register(application, ctx)
+    jump_host.register(application, ctx)
     add_node.register(application, ctx)
     add_panel.register(application, ctx)
     install.register(application, ctx)

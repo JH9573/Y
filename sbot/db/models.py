@@ -23,6 +23,36 @@ class Base(DeclarativeBase):
     pass
 
 
+class JumpHost(Base):
+    """统一登记的跳板机,服务器通过外键引用。
+
+    凭据语义与 Server 一致:password 加密存储,key 存 bot 机器上的私钥路径。
+    """
+
+    __tablename__ = "jump_hosts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False, default=22)
+    username: Mapped[str] = mapped_column(String(64), nullable=False)
+    auth_type: Mapped[str] = mapped_column(String(16), nullable=False)  # key / password
+    credential: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+    servers: Mapped[list["Server"]] = relationship(
+        back_populates="jump", lazy="selectin"
+    )
+
+
 class Server(Base):
     __tablename__ = "servers"
 
@@ -33,13 +63,10 @@ class Server(Base):
     username: Mapped[str] = mapped_column(String(64), nullable=False)
     auth_type: Mapped[str] = mapped_column(String(16), nullable=False)  # key / password
     credential: Mapped[str] = mapped_column(Text, nullable=False)
-    # 跳板机(可选)。jump_host 为空表示直连;凭据语义同上:
-    # password 加密存储,key 存 bot 机器上的私钥路径。
-    jump_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    jump_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    jump_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    jump_auth_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    jump_credential: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 跳板机引用(可选)。NULL 表示直连。
+    jump_host_id: Mapped[int | None] = mapped_column(
+        ForeignKey("jump_hosts.id", ondelete="SET NULL"), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     v2node_installed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -56,6 +83,9 @@ class Server(Base):
         back_populates="server",
         cascade="all, delete-orphan",
         lazy="selectin",
+    )
+    jump: Mapped[JumpHost | None] = relationship(
+        back_populates="servers", lazy="selectin"
     )
 
 

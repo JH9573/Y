@@ -2,7 +2,7 @@
 
 从服务器菜单点「✏️ 修改服务器信息」进入,可逐项修改:
   名称 / 地址 / 用户名 / 凭据(密码或密钥路径,按当前认证方式) / SSH 端口
-  切换认证方式(密码 ⇄ 密钥) / 跳板机(设置 / 修改 / 移除)
+  切换认证方式(密码 ⇄ 密钥) / 跳板机(从已登记列表中选用或改为直连)
 
 改 凭据 / 端口 / 跳板机 后会立即做一次 SSH 连通性测试,失败仅提示,改动照常保存。
 """
@@ -44,12 +44,7 @@ log = logging.getLogger(__name__)
     INPUT_PORT,
     INPUT_SWITCH_CRED,
     JUMP_MENU,
-    INPUT_JUMP_HOST,
-    INPUT_JUMP_PORT,
-    INPUT_JUMP_USERNAME,
-    CHOOSE_JUMP_AUTH,
-    INPUT_JUMP_CREDENTIAL,
-) = range(13)
+) = range(8)
 
 KEY = "editserver"
 
@@ -57,10 +52,8 @@ KEY = "editserver"
 # edsf:name | edsf:host | edsf:username | edsf:credential | edsf:port
 # | edsf:switch | edsf:jump | edsf:back
 CB_FIELD = "edsf:"
-# 跳板机子菜单 callback: edjp:set | edjp:remove | edjp:back
+# 跳板机子菜单 callback: edjp:sel:<id> | edjp:direct | edjp:back
 CB_JUMP = "edjp:"
-# 跳板机认证方式选择: ejauth:key | ejauth:password
-CB_JUMP_AUTH = "ejauth:"
 
 
 def _auth_label(auth_type: str | None) -> str:
@@ -68,12 +61,10 @@ def _auth_label(auth_type: str | None) -> str:
 
 
 def _jump_desc(server) -> str:
-    if not server.jump_host:
-        return "未配置(直连)"
-    return (
-        f"{server.jump_username}@{server.jump_host}:{server.jump_port}"
-        f"({_auth_label(server.jump_auth_type)}认证)"
-    )
+    if server.jump is None:
+        return "直连(未使用跳板机)"
+    jump = server.jump
+    return f"{jump.name} ({jump.username}@{jump.host}:{jump.port})"
 
 
 def _field_menu_markup(server) -> InlineKeyboardMarkup:
@@ -383,6 +374,7 @@ async def _show_jump_menu(
     server_id = context.user_data[KEY]["server_id"]
     async with crud.session() as s:
         server = await crud.get_server(s, server_id)
+        jumps = await crud.list_jump_hosts(s)
     if server is None:
         msg = "服务器不存在(可能已被删除)。"
         if update.callback_query and not new_message:
@@ -392,18 +384,25 @@ async def _show_jump_menu(
         context.user_data.pop(KEY, None)
         return ConversationHandler.END
 
-    configured = bool(server.jump_host)
     text = (
         f"🪜 跳板机 — {server.name}\n"
         f"当前: {_jump_desc(server)}\n\n"
-        "选择操作:"
     )
-    rows = [[InlineKeyboardButton(
-        "修改跳板机" if configured else "设置跳板机",
-        callback_data=f"{CB_JUMP}set",
-    )]]
-    if configured:
-        rows.append([InlineKeyboardButton("移除跳板机(改为直连)", callback_data=f"{CB_JUMP}remove")])
+    rows = []
+    if jumps:
+        text += "选择要使用的跳板机:"
+        for j in jumps:
+            mark = "✅ " if server.jump_host_id == j.id else ""
+            rows.append([InlineKeyboardButton(
+                f"{mark}🪜 {j.name} ({j.username}@{j.host})",
+                callback_data=f"{CB_JUMP}sel:{j.id}",
+            )])
+    else:
+        text += "尚未登记任何跳板机,请到 服务器管理 → 跳板机管理 中添加。"
+    direct_mark = "✅ " if server.jump_host_id is None else ""
+    rows.append([InlineKeyboardButton(
+        f"{direct_mark}直连(不使用跳板机)", callback_data=f"{CB_JUMP}direct"
+    )])
     rows.append([InlineKeyboardButton("⬅ 返回", callback_data=f"{CB_JUMP}back")])
     markup = InlineKeyboardMarkup(rows)
 
@@ -418,121 +417,45 @@ async def _show_jump_menu(
 
 async def cb_jump_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    action = query.data.split(":", 1)[1]
+    payload = query.data.split(":", 1)[1]
     server_id = context.user_data[KEY]["server_id"]
 
-    if action == "back":
+    if payload == "back":
         await query.answer()
         return await _show_field_menu(update, context)
 
-    if action == "remove":
+    if payload == "direct":
         async with crud.session() as s:
-            await crud.clear_server_jump(s, server_id)
-            await s.commit()
-        await _log_edit(update, server_id, "jump host removed")
-        await query.answer("已移除跳板机,恢复直连")
-        return await _show_field_menu(update, context)
+            server = await crud.get_server(s, server_id)
+            changed = server is not None and server.jump_host_id is not None
+            if changed:
+                await crud.set_server_jump_host(s, server_id, None)
+                await s.commit()
+        if not changed:
+            await query.answer("已是直连")
+            return JUMP_MENU
+        await _log_edit(update, server_id, "jump=direct")
+        await query.answer("已改为直连")
+        await query.edit_message_text("✅ 已改为直连,正在测试 SSH…")
+        await _test_and_notify(update, context, server_id)
+        return await _show_field_menu(update, context, new_message=True)
 
-    # set / 修改:走录入子流程
-    await query.answer()
-    context.user_data[KEY]["jump"] = {}
-    await query.edit_message_text(
-        "请输入跳板机地址(IP 或域名):\n(发送 /cancel 或点「❌ 取消」中止)"
-    )
-    return INPUT_JUMP_HOST
-
-
-async def step_jump_host(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    host = (update.message.text or "").strip()
-    if not host:
-        await update.message.reply_text("跳板机地址不能为空,请重新输入:")
-        return INPUT_JUMP_HOST
-    context.user_data[KEY]["jump"]["host"] = host
-    await update.message.reply_text("请输入跳板机 SSH 端口(直接回车或发送 / 使用默认 22):")
-    return INPUT_JUMP_PORT
-
-
-async def step_jump_port(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    raw = (update.message.text or "").strip()
-    if raw in ("", "/"):
-        port = 22
-    else:
-        try:
-            port = int(raw)
-        except ValueError:
-            await update.message.reply_text("端口必须是整数,请重新输入:")
-            return INPUT_JUMP_PORT
-        if not (1 <= port <= 65535):
-            await update.message.reply_text("端口范围 1-65535,请重新输入:")
-            return INPUT_JUMP_PORT
-    context.user_data[KEY]["jump"]["port"] = port
-    await update.message.reply_text("请输入跳板机 SSH 登录用户名:")
-    return INPUT_JUMP_USERNAME
-
-
-async def step_jump_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    username = (update.message.text or "").strip()
-    if not username:
-        await update.message.reply_text("用户名不能为空,请重新输入:")
-        return INPUT_JUMP_USERNAME
-    context.user_data[KEY]["jump"]["username"] = username
-    kb = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("密钥", callback_data=f"{CB_JUMP_AUTH}key"),
-                InlineKeyboardButton("密码", callback_data=f"{CB_JUMP_AUTH}password"),
-            ]
-        ]
-    )
-    await update.message.reply_text("选择跳板机认证方式:", reply_markup=kb)
-    return CHOOSE_JUMP_AUTH
-
-
-async def cb_jump_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    choice = query.data.split(":", 1)[1]
-    context.user_data[KEY]["jump"]["auth_type"] = choice
-    if choice == "key":
-        await query.edit_message_text(
-            "请输入跳板机私钥文件在 **bot 服务器上**的绝对路径(密钥内容不入库)。"
-        )
-    else:
-        await query.edit_message_text(
-            "请输入跳板机 SSH 登录密码。\n"
-            "(收到后 bot 会立即从聊天记录中删除该条消息并加密入库)"
-        )
-    return INPUT_JUMP_CREDENTIAL
-
-
-async def step_jump_credential(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> int:
-    server_id = context.user_data[KEY]["server_id"]
-    jump = context.user_data[KEY]["jump"]
-    credential = await _read_credential_input(update, context, jump["auth_type"])
-    if credential is None:
-        return INPUT_JUMP_CREDENTIAL
+    jump_id = int(payload.split(":", 1)[1])
     async with crud.session() as s:
-        await crud.set_server_jump(
-            s,
-            server_id,
-            host=jump["host"],
-            port=jump["port"],
-            username=jump["username"],
-            auth_type=jump["auth_type"],
-            credential=credential,
-        )
+        server = await crud.get_server(s, server_id)
+        jump = await crud.get_jump_host(s, jump_id)
+        if jump is None:
+            await query.answer("跳板机不存在(可能刚被删除)")
+            return await _show_jump_menu(update, context)
+        if server is not None and server.jump_host_id == jump_id:
+            await query.answer("已在使用该跳板机")
+            return JUMP_MENU
+        await crud.set_server_jump_host(s, server_id, jump_id)
         await s.commit()
-    await _log_edit(
-        update,
-        server_id,
-        f"jump={jump['username']}@{jump['host']}:{jump['port']} ({jump['auth_type']})",
-    )
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="✅ 跳板机已保存,正在测试 SSH…",
-    )
+        jump_name = jump.name
+    await _log_edit(update, server_id, f"jump={jump_name}")
+    await query.answer()
+    await query.edit_message_text(f"✅ 已选用跳板机「{jump_name}」,正在测试 SSH…")
     await _test_and_notify(update, context, server_id)
     return await _show_field_menu(update, context, new_message=True)
 
@@ -578,21 +501,8 @@ def register(application, ctx) -> None:
             ],
             JUMP_MENU: [
                 CallbackQueryHandler(
-                    cb_jump_action, pattern=rf"^{CB_JUMP}(set|remove|back)$"
+                    cb_jump_action, pattern=rf"^{CB_JUMP}(sel:\d+|direct|back)$"
                 ),
-            ],
-            INPUT_JUMP_HOST: [MessageHandler(NON_MENU_TEXT_FILTER, step_jump_host)],
-            INPUT_JUMP_PORT: [MessageHandler(NON_MENU_TEXT_FILTER, step_jump_port)],
-            INPUT_JUMP_USERNAME: [
-                MessageHandler(NON_MENU_TEXT_FILTER, step_jump_username)
-            ],
-            CHOOSE_JUMP_AUTH: [
-                CallbackQueryHandler(
-                    cb_jump_auth, pattern=rf"^{CB_JUMP_AUTH}(key|password)$"
-                ),
-            ],
-            INPUT_JUMP_CREDENTIAL: [
-                MessageHandler(NON_MENU_TEXT_FILTER, step_jump_credential)
             ],
         },
         fallbacks=[
