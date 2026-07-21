@@ -110,7 +110,10 @@ CB_DEL_REL_SRC = "rsrcd:"     # rsrcd:<id> -> 删除确认
 CB_DEL_REL_SRC_OK = "rsrcdok:"  # rsrcdok:<id> -> 真正删除
 CB_REL_PICK = "rpick:"        # rpick:<source_id> -> 拉取 Release 列表
 CB_REL_VER = "rver:"          # rver:<index> -> 选中版本(索引指向 user_data 缓存)
-CB_REL_GO = "rgo:"            # rgo:<index> -> 确认后执行下载并上传 OSS
+CB_REL_TOGGLE = "rtog:"       # rtog:<asset_index> -> 勾选/取消勾选某个文件
+CB_REL_ALL = "rall"           # 全选当前版本的文件
+CB_REL_NONE = "rnone"         # 清空当前版本的勾选
+CB_REL_GO = "rgo:"            # rgo:<index> -> 确认后下载并上传已勾选的文件
 # 远程配置(腾讯云 COS 上的 JSON 文件)
 CB_MENU_RCFG_LIST = "mrcls"   # 进入远程配置文件列表
 CB_MENU_RCFG_ADD = "mrcad"    # 进入添加远程配置文件对话

@@ -13,7 +13,6 @@ import logging
 import os
 import shutil
 import tempfile
-from contextlib import suppress
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
@@ -26,9 +25,12 @@ from .common import (
     CB_DEL_REL_SRC,
     CB_DEL_REL_SRC_OK,
     CB_MENU_REL_ADD,
+    CB_REL_ALL,
     CB_REL_GO,
+    CB_REL_NONE,
     CB_REL_PICK,
     CB_REL_SRC,
+    CB_REL_TOGGLE,
     CB_REL_VER,
     get_ctx,
     human_size,
@@ -263,38 +265,129 @@ async def cb_pick_version(
         return
 
     oss, prefix = oss_pair
-    total = sum(a["size"] for a in rel["assets"])
-    lines = [f"· {a['name']} ({human_size(a['size'])})" for a in rel["assets"]]
-    idx = query.data.split(":", 1)[1]
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ 确认发布", callback_data=f"{CB_REL_GO}{idx}"),
+    idx = int(query.data.split(":", 1)[1])
+    # 进入勾选页:默认全选,状态存 user_data
+    cache["sel_version"] = idx
+    cache["selected"] = set(range(len(rel["assets"])))
+    cache["oss_bucket"] = oss.bucket
+    cache["oss_prefix"] = prefix
+    await _render_selection(query, context)
+
+
+def _selection_state(context) -> tuple[dict, dict, set[int]] | None:
+    """取当前勾选上下文,返回 (缓存, release, 已选索引集合)。"""
+    cache = context.user_data.get(RELEASES_KEY) or {}
+    items = cache.get("items") or []
+    ver = cache.get("sel_version")
+    if ver is None or not (0 <= ver < len(items)):
+        return None
+    selected = cache.get("selected")
+    if not isinstance(selected, set):
+        return None
+    return cache, items[ver], selected
+
+
+async def _render_selection(query, context) -> None:
+    """渲染文件勾选页(每个文件一个可切换按钮 + 全选/清空/确认)。"""
+    state = _selection_state(context)
+    if state is None:
+        await query.edit_message_text("版本列表已过期,请重新进入仓库选择。")
+        return
+    cache, rel, selected = state
+    assets = rel["assets"]
+    ver = cache["sel_version"]
+
+    rows = []
+    for i, a in enumerate(assets):
+        mark = "✅" if i in selected else "⬜"
+        rows.append([InlineKeyboardButton(
+            f"{mark} {a['name']} ({human_size(a['size'])})",
+            callback_data=f"{CB_REL_TOGGLE}{i}",
+        )])
+    rows.append([
+        InlineKeyboardButton("全选", callback_data=CB_REL_ALL),
+        InlineKeyboardButton("清空", callback_data=CB_REL_NONE),
+    ])
+    rows.append([
+        InlineKeyboardButton(
+            f"✅ 确认发布({len(selected)})", callback_data=f"{CB_REL_GO}{ver}",
+        ),
         InlineKeyboardButton(
             "« 返回", callback_data=f"{CB_REL_PICK}{cache['source_id']}",
         ),
-    ]])
+    ])
+    sel_total = sum(assets[i]["size"] for i in selected)
     await query.edit_message_text(
-        truncate(
-            f"📦 {rel['tag']} — {cache['repo']}\n"
-            f"共 {len(rel['assets'])} 个文件,合计 {human_size(total)}:\n"
-            + "\n".join(lines)
-            + f"\n\n上传到: oss://{oss.bucket}/{prefix}/{rel['tag']}/\n"
-            f"并刷新固定目录: {prefix}/latest/\n"
-            f"文件将设为公共读(public-read),确认发布?"
-        ),
-        reply_markup=kb,
+        f"📦 {rel['tag']} — {cache['repo']}\n"
+        f"勾选要发布的文件(已选 {len(selected)}/{len(assets)},"
+        f"合计 {human_size(sel_total)}):\n\n"
+        f"上传到: oss://{cache['oss_bucket']}/{cache['oss_prefix']}/{rel['tag']}/\n"
+        f"并刷新固定目录: {cache['oss_prefix']}/latest/\n"
+        f"文件将设为公共读(public-read)。",
+        reply_markup=InlineKeyboardMarkup(rows),
     )
+
+
+async def cb_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    state = _selection_state(context)
+    if state is None:
+        await query.edit_message_text("版本列表已过期,请重新进入仓库选择。")
+        return
+    _cache, rel, selected = state
+    try:
+        idx = int(query.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return
+    if not (0 <= idx < len(rel["assets"])):
+        return
+    if idx in selected:
+        selected.discard(idx)
+    else:
+        selected.add(idx)
+    await _render_selection(query, context)
+
+
+async def cb_select_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    state = _selection_state(context)
+    if state is None:
+        await query.edit_message_text("版本列表已过期,请重新进入仓库选择。")
+        return
+    cache, rel, _selected = state
+    cache["selected"] = set(range(len(rel["assets"])))
+    await _render_selection(query, context)
+
+
+async def cb_select_none(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    state = _selection_state(context)
+    if state is None:
+        await query.edit_message_text("版本列表已过期,请重新进入仓库选择。")
+        return
+    cache, _rel, selected = state
+    selected.clear()
+    await _render_selection(query, context)
 
 
 # ---------- 执行发布 ----------
 
 async def cb_publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
-    found = _release_from_index(context, query.data)
-    if found is None:
+    state = _selection_state(context)
+    if state is None:
+        await query.answer()
         await query.edit_message_text("版本列表已过期,请重新进入仓库选择。")
         return
-    cache, rel = found
+    cache, rel, selected = state
+    if not selected:
+        await query.answer("请至少勾选一个文件。", show_alert=True)
+        return
+    await query.answer()
+
     ctx = get_ctx(context)
     try:
         oss_pair = await load_oss(ctx)
@@ -312,7 +405,8 @@ async def cb_publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     oss, prefix = oss_pair
     tag = rel["tag"]
-    assets = rel["assets"]
+    # 只处理勾选的文件,保持原始顺序
+    assets = [rel["assets"][i] for i in sorted(selected)]
     n = len(assets)
     uploaded: list[tuple[str, str]] = []  # (文件名, 版本 key)
     tmpdir = tempfile.mkdtemp(prefix="sbot-release-")
@@ -329,23 +423,17 @@ async def cb_publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             os.remove(path)  # 及时释放磁盘,大包场景重要
             uploaded.append((name, key))
 
-        # 刷新 latest/:先复制新文件(覆盖同名),再清掉上个版本残留
+        # 刷新 latest/:仅把本次上传的文件复制过去(覆盖同名)。
+        # 因为是按需选择上传,不删除 latest/ 里其它已存在的文件。
         await query.edit_message_text(f"⏳ 正在刷新 {prefix}/latest/ …")
         latest_prefix = f"{prefix}/latest/"
-        old_keys = set(await oss.list_keys(latest_prefix))
         copy_errors: list[str] = []
-        new_keys: set[str] = set()
         for name, key in uploaded:
-            latest_key = latest_prefix + name
             try:
-                await oss.copy_object(key, latest_key)
-                new_keys.add(latest_key)
+                await oss.copy_object(key, latest_prefix + name)
             except OSSAPIError as exc:
                 # 服务端复制单文件上限 1GB,超限等场景仅记录不中断
                 copy_errors.append(f"{name}: {exc}")
-        for stale in old_keys - new_keys:
-            with suppress(OSSAPIError):
-                await oss.delete_object(stale)
     except (GitHubAPIError, OSSAPIError) as exc:
         detail = f"repo={source.repo}, tag={tag}: {exc}"
         log.warning("发布失败: %s", detail)
@@ -412,6 +500,15 @@ def register(application, ctx) -> None:
     )
     application.add_handler(
         CallbackQueryHandler(cb_pick_version, pattern=rf"^{CB_REL_VER}\d+$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(cb_toggle, pattern=rf"^{CB_REL_TOGGLE}\d+$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(cb_select_all, pattern=f"^{CB_REL_ALL}$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(cb_select_none, pattern=f"^{CB_REL_NONE}$")
     )
     application.add_handler(
         CallbackQueryHandler(cb_publish, pattern=rf"^{CB_REL_GO}\d+$")
