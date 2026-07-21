@@ -191,6 +191,33 @@ class ReleaseSource(Base):
     )
 
 
+class OssConfig(Base):
+    """阿里云 OSS 分发配置(单行表,取第一条生效)。
+
+    通过 bot 交互录入,优先于 .env 中的 OSS_* 配置。
+    access_key_secret 加密存储;access_key_id 明文,展示时打码。
+    """
+
+    __tablename__ = "oss_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    region: Mapped[str] = mapped_column(String(32), nullable=False)
+    bucket: Mapped[str] = mapped_column(String(64), nullable=False)
+    access_key_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    access_key_secret: Mapped[str] = mapped_column(Text, nullable=False)  # 加密存储
+    public_base_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    prefix: Mapped[str] = mapped_column(String(64), nullable=False, default="releases")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
 class OperationLog(Base):
     __tablename__ = "operation_logs"
 

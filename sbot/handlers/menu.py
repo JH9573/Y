@@ -19,6 +19,7 @@ from . import dns, logs, panel, release, server
 from .common import (
     CB_MENU_DNS_ADD,
     CB_MENU_DNS_LIST,
+    CB_MENU_OSS_CFG,
     CB_MENU_PNL_LIST,
     CB_MENU_REL_ADD,
     CB_MENU_REL_LIST,
@@ -80,6 +81,7 @@ async def show_release_group(update: Update, context: ContextTypes.DEFAULT_TYPE)
             InlineKeyboardButton("📋 仓库列表", callback_data=CB_MENU_REL_LIST),
             InlineKeyboardButton("➕ 添加仓库", callback_data=CB_MENU_REL_ADD),
         ],
+        [InlineKeyboardButton("⚙️ OSS 配置", callback_data=CB_MENU_OSS_CFG)],
     ])
     await update.effective_message.reply_text("安装包分发:", reply_markup=kb)
 

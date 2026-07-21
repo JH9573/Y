@@ -20,6 +20,7 @@ from .models import (
     DnsAccount,
     Node,
     OperationLog,
+    OssConfig,
     Panel,
     PanelNode,
     ReleaseSource,
@@ -480,6 +481,44 @@ async def delete_release_source(s: AsyncSession, source_id: int) -> None:
     source = await s.get(ReleaseSource, source_id)
     if source is not None:
         await s.delete(source)
+
+
+# ---------- oss config ----------
+
+async def get_oss_config(s: AsyncSession) -> Optional[OssConfig]:
+    """单行配置,取第一条。"""
+    result = await s.execute(select(OssConfig).order_by(OssConfig.id).limit(1))
+    return result.scalar_one_or_none()
+
+
+async def upsert_oss_config(
+    s: AsyncSession,
+    *,
+    region: str,
+    bucket: str,
+    access_key_id: str,
+    access_key_secret: str,
+    public_base_url: str | None,
+    prefix: str,
+) -> OssConfig:
+    config = await get_oss_config(s)
+    if config is None:
+        config = OssConfig()
+        s.add(config)
+    config.region = region
+    config.bucket = bucket
+    config.access_key_id = access_key_id
+    config.access_key_secret = access_key_secret
+    config.public_base_url = public_base_url
+    config.prefix = prefix
+    await s.flush()
+    return config
+
+
+async def delete_oss_config(s: AsyncSession) -> None:
+    config = await get_oss_config(s)
+    if config is not None:
+        await s.delete(config)
 
 
 # ---------- operation logs ----------

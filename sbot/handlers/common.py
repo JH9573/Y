@@ -12,13 +12,16 @@ from ..core.crypto import Crypto
 from ..core.ssh import SSHClient
 from ..services.cloudflare_api import CloudflareClient
 from ..services.github_release import GitHubReleaseClient
-from ..services.oss_api import OSSClient
 from ..services.v2board_api import V2BoardClient
 
 
 @dataclass
 class AppContext:
-    """注入到 Telegram bot_data 中,供所有 handler 访问。"""
+    """注入到 Telegram bot_data 中,供所有 handler 访问。
+
+    OSS 客户端不在这里:其配置可在运行期通过 bot 修改(存库,.env 回退),
+    由 handlers/oss_config.load_oss 按需构建。
+    """
 
     config: Config
     crypto: Crypto
@@ -26,7 +29,6 @@ class AppContext:
     v2board: V2BoardClient
     cloudflare: CloudflareClient
     github: GitHubReleaseClient
-    oss: OSSClient | None  # 未配置 OSS 时为 None,分发功能提示未启用
 
 
 CTX_KEY = "app_ctx"
@@ -109,6 +111,12 @@ CB_DEL_REL_SRC_OK = "rsrcdok:"  # rsrcdok:<id> -> 真正删除
 CB_REL_PICK = "rpick:"        # rpick:<source_id> -> 拉取 Release 列表
 CB_REL_VER = "rver:"          # rver:<index> -> 选中版本(索引指向 user_data 缓存)
 CB_REL_GO = "rgo:"            # rgo:<index> -> 确认后执行下载并上传 OSS
+CB_MENU_OSS_CFG = "mosscfg"   # 查看 OSS 配置
+CB_OSS_EDIT = "osse"          # 进入 OSS 配置录入对话
+CB_OSS_SAVE = "osssave"       # 校验失败后仍要保存
+CB_OSS_DROP = "ossdrop"       # 校验失败后放弃保存
+CB_OSS_CLEAR = "ossclr"       # 清除数据库中的 OSS 配置(回退 .env)
+CB_OSS_CLEAR_OK = "ossclrok"  # 清除二次确认
 
 # 更新重启
 CB_UPDATE_CONFIRM = "updok"   # 二次确认后:更新当前分支并重启

@@ -35,6 +35,7 @@ from .common import (
     humanize_age,
     truncate,
 )
+from .oss_config import load_oss
 
 
 log = logging.getLogger(__name__)
@@ -101,11 +102,17 @@ async def cb_source_detail(
         await query.edit_message_text("仓库不存在,可能已被删除。")
         return
     ctx = get_ctx(context)
-    oss_note = (
-        f"oss://{ctx.oss.bucket}/{ctx.config.oss_prefix}/"
-        if ctx.oss is not None
-        else "⚠️ 未配置(.env 补 OSS_* 后重启)"
-    )
+    try:
+        oss_pair = await load_oss(ctx)
+    except OSSAPIError as exc:
+        oss_pair = None
+        oss_note = f"⚠️ 配置异常: {exc}"
+    else:
+        oss_note = (
+            f"oss://{oss_pair[0].bucket}/{oss_pair[1]}/"
+            if oss_pair is not None
+            else "⚠️ 未配置(分发菜单 → OSS 配置)"
+        )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton(
             "🚀 选择版本发布", callback_data=f"{CB_REL_PICK}{source.id}",
@@ -244,14 +251,18 @@ async def cb_pick_version(
         return
     cache, rel = found
     ctx = get_ctx(context)
-    if ctx.oss is None:
+    try:
+        oss_pair = await load_oss(ctx)
+    except OSSAPIError as exc:
+        await query.edit_message_text(f"⚠️ OSS 配置异常,无法发布:{exc}")
+        return
+    if oss_pair is None:
         await query.edit_message_text(
-            "⚠️ OSS 未配置,无法发布。请在 .env 中补齐 OSS_REGION / "
-            "OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET 后重启 bot。"
+            "⚠️ OSS 未配置,无法发布。请在「安装包分发 → ⚙️ OSS 配置」中录入。"
         )
         return
 
-    prefix = ctx.config.oss_prefix
+    oss, prefix = oss_pair
     total = sum(a["size"] for a in rel["assets"])
     lines = [f"· {a['name']} ({human_size(a['size'])})" for a in rel["assets"]]
     idx = query.data.split(":", 1)[1]
@@ -266,7 +277,7 @@ async def cb_pick_version(
             f"📦 {rel['tag']} — {cache['repo']}\n"
             f"共 {len(rel['assets'])} 个文件,合计 {human_size(total)}:\n"
             + "\n".join(lines)
-            + f"\n\n上传到: oss://{ctx.oss.bucket}/{prefix}/{rel['tag']}/\n"
+            + f"\n\n上传到: oss://{oss.bucket}/{prefix}/{rel['tag']}/\n"
             f"并刷新固定目录: {prefix}/latest/\n"
             f"文件将设为公共读(public-read),确认发布?"
         ),
@@ -285,7 +296,12 @@ async def cb_publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     cache, rel = found
     ctx = get_ctx(context)
-    if ctx.oss is None:
+    try:
+        oss_pair = await load_oss(ctx)
+    except OSSAPIError as exc:
+        await query.edit_message_text(f"⚠️ OSS 配置异常,无法发布:{exc}")
+        return
+    if oss_pair is None:
         await query.edit_message_text("⚠️ OSS 未配置,无法发布。")
         return
     async with crud.session() as s:
@@ -294,8 +310,7 @@ async def cb_publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await query.edit_message_text("仓库不存在,可能已被删除。")
         return
 
-    oss = ctx.oss
-    prefix = ctx.config.oss_prefix
+    oss, prefix = oss_pair
     tag = rel["tag"]
     assets = rel["assets"]
     n = len(assets)

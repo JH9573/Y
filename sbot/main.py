@@ -40,6 +40,7 @@ from .handlers import (
     menu,
     node,
     ops,
+    oss_config,
     panel,
     panel_node,
     release,
@@ -50,7 +51,6 @@ from .handlers import (
 from .handlers.common import AppContext, CTX_KEY
 from .services.cloudflare_api import CloudflareClient
 from .services.github_release import GitHubReleaseClient
-from .services.oss_api import OSSClient
 from .services.v2board_api import V2BoardClient
 
 
@@ -126,18 +126,6 @@ def build_application() -> Application:
     v2board_client = V2BoardClient(crypto, timeout=cfg.ssh_timeout)
     cloudflare_client = CloudflareClient(crypto, timeout=cfg.ssh_timeout)
     github_client = GitHubReleaseClient(crypto, timeout=cfg.ssh_timeout)
-    oss_client = (
-        OSSClient(
-            region=cfg.oss_region,
-            bucket=cfg.oss_bucket,
-            access_key_id=cfg.oss_access_key_id,
-            access_key_secret=cfg.oss_access_key_secret,
-            endpoint=cfg.oss_endpoint,
-            public_base_url=cfg.oss_public_base_url,
-        )
-        if cfg.oss_configured
-        else None
-    )
     ctx = AppContext(
         config=cfg,
         crypto=crypto,
@@ -145,7 +133,6 @@ def build_application() -> Application:
         v2board=v2board_client,
         cloudflare=cloudflare_client,
         github=github_client,
-        oss=oss_client,
     )
 
     application = (
@@ -177,8 +164,9 @@ def build_application() -> Application:
     edit_dns_account.register(application, ctx)
     dns_record.register(application, ctx)
     dns.register(application, ctx)
-    # 安装包分发(add conversation 先注册,普通 callback 后)
+    # 安装包分发(add/oss_config conversation 先注册,普通 callback 后)
     add_release_source.register(application, ctx)
+    oss_config.register(application, ctx)
     release.register(application, ctx)
     logs.register(application, ctx)
     update_bot.register(application, ctx)

@@ -244,6 +244,10 @@ class OSSClient:
     async def delete_object(self, key: str) -> None:
         await self._request("DELETE", key)
 
+    async def check_access(self) -> None:
+        """轻量校验凭据/区域/bucket 是否可用(ListObjectsV2 取 1 条)。"""
+        await self._request("GET", "", query={"list-type": "2", "max-keys": "1"})
+
     async def list_keys(self, prefix: str) -> list[str]:
         """ListObjectsV2: 列出指定前缀下的全部 object key。"""
         keys: list[str] = []
