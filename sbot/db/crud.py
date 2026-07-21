@@ -15,7 +15,16 @@ from sqlalchemy.ext.asyncio import (
 
 from datetime import datetime
 
-from .models import Base, DnsAccount, Node, OperationLog, Panel, PanelNode, Server
+from .models import (
+    Base,
+    DnsAccount,
+    Node,
+    OperationLog,
+    Panel,
+    PanelNode,
+    ReleaseSource,
+    Server,
+)
 
 
 _engine = None
@@ -431,6 +440,46 @@ async def delete_dns_account(s: AsyncSession, account_id: int) -> None:
     account = await s.get(DnsAccount, account_id)
     if account is not None:
         await s.delete(account)
+
+
+# ---------- release sources ----------
+
+async def list_release_sources(s: AsyncSession) -> list[ReleaseSource]:
+    result = await s.execute(select(ReleaseSource).order_by(ReleaseSource.id))
+    return list(result.scalars().all())
+
+
+async def get_release_source(
+    s: AsyncSession, source_id: int
+) -> Optional[ReleaseSource]:
+    return await s.get(ReleaseSource, source_id)
+
+
+async def get_release_source_by_repo(
+    s: AsyncSession, repo: str
+) -> Optional[ReleaseSource]:
+    result = await s.execute(
+        select(ReleaseSource).where(ReleaseSource.repo == repo)
+    )
+    return result.scalar_one_or_none()
+
+
+async def create_release_source(
+    s: AsyncSession,
+    *,
+    repo: str,
+    token: str,
+) -> ReleaseSource:
+    source = ReleaseSource(repo=repo, token=token)
+    s.add(source)
+    await s.flush()
+    return source
+
+
+async def delete_release_source(s: AsyncSession, source_id: int) -> None:
+    source = await s.get(ReleaseSource, source_id)
+    if source is not None:
+        await s.delete(source)
 
 
 # ---------- operation logs ----------

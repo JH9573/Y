@@ -11,6 +11,8 @@ from ..config import Config
 from ..core.crypto import Crypto
 from ..core.ssh import SSHClient
 from ..services.cloudflare_api import CloudflareClient
+from ..services.github_release import GitHubReleaseClient
+from ..services.oss_api import OSSClient
 from ..services.v2board_api import V2BoardClient
 
 
@@ -23,6 +25,8 @@ class AppContext:
     ssh: SSHClient
     v2board: V2BoardClient
     cloudflare: CloudflareClient
+    github: GitHubReleaseClient
+    oss: OSSClient | None  # 未配置 OSS 时为 None,分发功能提示未启用
 
 
 CTX_KEY = "app_ctx"
@@ -95,6 +99,17 @@ CB_DNS_RECORD_DEL_OK = "dnsrdok:"  # dnsrdok:<record_id> -> 真正删除
 CB_DNS_RECORD_ADD = "dnsradd"     # 添加记录入口(无参数,从 user_data 取上下文)
 CB_DNS_RECORD_EDIT = "dnsre:"     # dnsre:<record_id> -> 编辑记录
 
+# 安装包分发(GitHub Release -> OSS)
+CB_MENU_REL_LIST = "mrells"   # 进入分发仓库列表
+CB_MENU_REL_ADD = "mrelad"    # 进入添加分发仓库对话
+CB_REL_SRC = "rsrc:"          # rsrc:<id> -> 仓库详情
+CB_BACK_REL_LIST = "back:rels"  # 返回仓库列表
+CB_DEL_REL_SRC = "rsrcd:"     # rsrcd:<id> -> 删除确认
+CB_DEL_REL_SRC_OK = "rsrcdok:"  # rsrcdok:<id> -> 真正删除
+CB_REL_PICK = "rpick:"        # rpick:<source_id> -> 拉取 Release 列表
+CB_REL_VER = "rver:"          # rver:<index> -> 选中版本(索引指向 user_data 缓存)
+CB_REL_GO = "rgo:"            # rgo:<index> -> 确认后执行下载并上传 OSS
+
 # 更新重启
 CB_UPDATE_CONFIRM = "updok"   # 二次确认后:更新当前分支并重启
 CB_UPDATE_CANCEL = "updno"    # 取消更新
@@ -110,6 +125,16 @@ def truncate(text: str, limit: int = 3500) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n…(已截断,共 {len(text)} 字符)"
+
+
+def human_size(num: int) -> str:
+    """字节数转可读大小(1.5 MB / 320.0 KB / 12 B)。"""
+    size = float(num)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
 
 
 def humanize_age(when: datetime | None) -> str:
@@ -134,13 +159,14 @@ def humanize_age(when: datetime | None) -> str:
 MENU_SERVER_GROUP = "🖥 服务器管理"
 MENU_PANEL_GROUP = "🎛 面板管理"
 MENU_DNS_GROUP = "🌐 DNS 管理"
+MENU_RELEASE_GROUP = "📦 安装包分发"
 MENU_LOGS = "📜 操作日志"
 MENU_UPDATE = "🔄 更新重启"
 MENU_CANCEL = "❌ 取消"
 
 ALL_MENU_TEXTS: frozenset[str] = frozenset({
-    MENU_SERVER_GROUP, MENU_PANEL_GROUP, MENU_DNS_GROUP, MENU_LOGS,
-    MENU_UPDATE, MENU_CANCEL,
+    MENU_SERVER_GROUP, MENU_PANEL_GROUP, MENU_DNS_GROUP, MENU_RELEASE_GROUP,
+    MENU_LOGS, MENU_UPDATE, MENU_CANCEL,
 })
 
 # ConversationHandler 内部用,排除菜单按钮文本以免被 state 误吃
@@ -156,8 +182,9 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton(MENU_SERVER_GROUP), KeyboardButton(MENU_PANEL_GROUP)],
-            [KeyboardButton(MENU_DNS_GROUP), KeyboardButton(MENU_LOGS)],
-            [KeyboardButton(MENU_UPDATE), KeyboardButton(MENU_CANCEL)],
+            [KeyboardButton(MENU_DNS_GROUP), KeyboardButton(MENU_RELEASE_GROUP)],
+            [KeyboardButton(MENU_LOGS), KeyboardButton(MENU_UPDATE)],
+            [KeyboardButton(MENU_CANCEL)],
         ],
         resize_keyboard=True,
         is_persistent=True,

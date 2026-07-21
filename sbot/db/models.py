@@ -168,6 +168,29 @@ class DnsAccount(Base):
     )
 
 
+class ReleaseSource(Base):
+    """GitHub Release 分发源(私有仓库)。
+
+    repo 形如 owner/name,作为唯一标识与展示名。
+    token 为 fine-grained PAT,加密存储,仓库权限至少需要 Contents:Read。
+    """
+
+    __tablename__ = "release_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    repo: Mapped[str] = mapped_column(String(140), unique=True, nullable=False)
+    token: Mapped[str] = mapped_column(Text, nullable=False)  # 加密存储
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
 class OperationLog(Base):
     __tablename__ = "operation_logs"
 
