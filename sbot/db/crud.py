@@ -17,6 +17,7 @@ from datetime import datetime
 
 from .models import (
     Base,
+    CosConfig,
     DnsAccount,
     Node,
     OperationLog,
@@ -24,6 +25,7 @@ from .models import (
     Panel,
     PanelNode,
     ReleaseSource,
+    RemoteConfigFile,
     Server,
 )
 
@@ -519,6 +521,77 @@ async def delete_oss_config(s: AsyncSession) -> None:
     config = await get_oss_config(s)
     if config is not None:
         await s.delete(config)
+
+
+# ---------- cos config ----------
+
+async def get_cos_config(s: AsyncSession) -> Optional[CosConfig]:
+    """单行配置,取第一条。"""
+    result = await s.execute(select(CosConfig).order_by(CosConfig.id).limit(1))
+    return result.scalar_one_or_none()
+
+
+async def upsert_cos_config(
+    s: AsyncSession,
+    *,
+    region: str,
+    bucket: str,
+    secret_id: str,
+    secret_key: str,
+) -> CosConfig:
+    config = await get_cos_config(s)
+    if config is None:
+        config = CosConfig()
+        s.add(config)
+    config.region = region
+    config.bucket = bucket
+    config.secret_id = secret_id
+    config.secret_key = secret_key
+    await s.flush()
+    return config
+
+
+async def delete_cos_config(s: AsyncSession) -> None:
+    config = await get_cos_config(s)
+    if config is not None:
+        await s.delete(config)
+
+
+# ---------- remote config files ----------
+
+async def list_remote_files(s: AsyncSession) -> list[RemoteConfigFile]:
+    result = await s.execute(
+        select(RemoteConfigFile).order_by(RemoteConfigFile.id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_remote_file(
+    s: AsyncSession, file_id: int
+) -> Optional[RemoteConfigFile]:
+    return await s.get(RemoteConfigFile, file_id)
+
+
+async def get_remote_file_by_path(
+    s: AsyncSession, path: str
+) -> Optional[RemoteConfigFile]:
+    result = await s.execute(
+        select(RemoteConfigFile).where(RemoteConfigFile.path == path)
+    )
+    return result.scalar_one_or_none()
+
+
+async def create_remote_file(s: AsyncSession, *, path: str) -> RemoteConfigFile:
+    file = RemoteConfigFile(path=path)
+    s.add(file)
+    await s.flush()
+    return file
+
+
+async def delete_remote_file(s: AsyncSession, file_id: int) -> None:
+    file = await s.get(RemoteConfigFile, file_id)
+    if file is not None:
+        await s.delete(file)
 
 
 # ---------- operation logs ----------

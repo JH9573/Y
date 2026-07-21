@@ -111,6 +111,24 @@ CB_DEL_REL_SRC_OK = "rsrcdok:"  # rsrcdok:<id> -> 真正删除
 CB_REL_PICK = "rpick:"        # rpick:<source_id> -> 拉取 Release 列表
 CB_REL_VER = "rver:"          # rver:<index> -> 选中版本(索引指向 user_data 缓存)
 CB_REL_GO = "rgo:"            # rgo:<index> -> 确认后执行下载并上传 OSS
+# 远程配置(腾讯云 COS 上的 JSON 文件)
+CB_MENU_RCFG_LIST = "mrcls"   # 进入远程配置文件列表
+CB_MENU_RCFG_ADD = "mrcad"    # 进入添加远程配置文件对话
+CB_MENU_COS_CFG = "mcoscfg"   # 查看 COS 配置
+CB_COS_EDIT = "cose"          # 进入 COS 配置录入对话
+CB_COS_SAVE = "cossave"       # 校验失败后仍要保存
+CB_COS_DROP = "cosdrop"       # 校验失败后放弃保存
+CB_COS_CLEAR = "cosclr"       # 清除 COS 配置
+CB_COS_CLEAR_OK = "cosclrok"  # 清除二次确认
+CB_RCFG_FILE = "rcf:"         # rcf:<id> -> 文件详情(拉取并展示内容)
+CB_BACK_RCFG_LIST = "back:rcfg"  # 返回文件列表
+CB_RCFG_DEL = "rcfd:"         # rcfd:<id> -> 移除文件确认(仅移出列表)
+CB_RCFG_DEL_OK = "rcfdok:"    # rcfdok:<id> -> 真正移除
+CB_RCFG_SET = "rcfs:"         # rcfs:<id> -> 修改单个字段对话入口
+CB_RCFG_REPLACE = "rcfp:"     # rcfp:<id> -> 替换整个文件对话入口
+CB_RCFG_ADD_FORCE = "rcfaf"   # 文件不存在时确认创建
+CB_RCFG_ADD_DROP = "rcfad"    # 文件不存在时放弃添加
+
 CB_MENU_OSS_CFG = "mosscfg"   # 查看 OSS 配置
 CB_OSS_EDIT = "osse"          # 进入 OSS 配置录入对话
 CB_OSS_SAVE = "osssave"       # 校验失败后仍要保存
@@ -168,13 +186,14 @@ MENU_SERVER_GROUP = "🖥 服务器管理"
 MENU_PANEL_GROUP = "🎛 面板管理"
 MENU_DNS_GROUP = "🌐 DNS 管理"
 MENU_RELEASE_GROUP = "📦 安装包分发"
+MENU_REMOTE_GROUP = "🛠 远程配置"
 MENU_LOGS = "📜 操作日志"
 MENU_UPDATE = "🔄 更新重启"
 MENU_CANCEL = "❌ 取消"
 
 ALL_MENU_TEXTS: frozenset[str] = frozenset({
     MENU_SERVER_GROUP, MENU_PANEL_GROUP, MENU_DNS_GROUP, MENU_RELEASE_GROUP,
-    MENU_LOGS, MENU_UPDATE, MENU_CANCEL,
+    MENU_REMOTE_GROUP, MENU_LOGS, MENU_UPDATE, MENU_CANCEL,
 })
 
 # ConversationHandler 内部用,排除菜单按钮文本以免被 state 误吃
@@ -191,8 +210,8 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [
             [KeyboardButton(MENU_SERVER_GROUP), KeyboardButton(MENU_PANEL_GROUP)],
             [KeyboardButton(MENU_DNS_GROUP), KeyboardButton(MENU_RELEASE_GROUP)],
-            [KeyboardButton(MENU_LOGS), KeyboardButton(MENU_UPDATE)],
-            [KeyboardButton(MENU_CANCEL)],
+            [KeyboardButton(MENU_REMOTE_GROUP), KeyboardButton(MENU_LOGS)],
+            [KeyboardButton(MENU_UPDATE), KeyboardButton(MENU_CANCEL)],
         ],
         resize_keyboard=True,
         is_persistent=True,

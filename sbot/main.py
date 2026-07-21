@@ -27,9 +27,12 @@ from .handlers import (
     add_node,
     add_panel,
     add_release_source,
+    add_remote_file,
     add_server,
+    cos_config,
     dns,
     dns_record,
+    edit_remote_file,
     edit_dns_account,
     edit_panel,
     edit_panel_node,
@@ -44,6 +47,7 @@ from .handlers import (
     panel,
     panel_node,
     release,
+    remote_config,
     server,
     uninstall,
     update_bot,
@@ -168,6 +172,11 @@ def build_application() -> Application:
     add_release_source.register(application, ctx)
     oss_config.register(application, ctx)
     release.register(application, ctx)
+    # 远程配置(conversation 先注册,普通 callback 后)
+    cos_config.register(application, ctx)
+    add_remote_file.register(application, ctx)
+    edit_remote_file.register(application, ctx)
+    remote_config.register(application, ctx)
     logs.register(application, ctx)
     update_bot.register(application, ctx)
     # menu 必须放在所有 ConversationHandler 之后,确保对话 entry 先匹配

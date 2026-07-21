@@ -15,12 +15,15 @@ from telegram.ext import (
     filters,
 )
 
-from . import dns, logs, panel, release, server
+from . import dns, logs, panel, release, remote_config, server
 from .common import (
+    CB_MENU_COS_CFG,
     CB_MENU_DNS_ADD,
     CB_MENU_DNS_LIST,
     CB_MENU_OSS_CFG,
     CB_MENU_PNL_LIST,
+    CB_MENU_RCFG_ADD,
+    CB_MENU_RCFG_LIST,
     CB_MENU_REL_ADD,
     CB_MENU_REL_LIST,
     CB_MENU_SRV_LIST,
@@ -31,6 +34,7 @@ from .common import (
     MENU_LOGS,
     MENU_PANEL_GROUP,
     MENU_RELEASE_GROUP,
+    MENU_REMOTE_GROUP,
     MENU_SERVER_GROUP,
     main_menu_kb,
 )
@@ -86,6 +90,17 @@ async def show_release_group(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.effective_message.reply_text("安装包分发:", reply_markup=kb)
 
 
+async def show_remote_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 文件列表", callback_data=CB_MENU_RCFG_LIST),
+            InlineKeyboardButton("➕ 添加文件", callback_data=CB_MENU_RCFG_ADD),
+        ],
+        [InlineKeyboardButton("⚙️ COS 配置", callback_data=CB_MENU_COS_CFG)],
+    ])
+    await update.effective_message.reply_text("远程配置:", reply_markup=kb)
+
+
 async def cb_menu_server_list(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -118,6 +133,14 @@ async def cb_menu_release_list(
     await release.show_source_list(update, context)
 
 
+async def cb_menu_rcfg_list(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    await remote_config.show_file_list(update, context)
+
+
 async def cancel_outside_conv(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -142,6 +165,9 @@ def register(application, ctx) -> None:
         MessageHandler(filters.Text([MENU_RELEASE_GROUP]), show_release_group)
     )
     application.add_handler(
+        MessageHandler(filters.Text([MENU_REMOTE_GROUP]), show_remote_group)
+    )
+    application.add_handler(
         MessageHandler(filters.Text([MENU_LOGS]), logs.cmd_logs)
     )
     application.add_handler(
@@ -159,4 +185,7 @@ def register(application, ctx) -> None:
     )
     application.add_handler(
         CallbackQueryHandler(cb_menu_release_list, pattern=f"^{CB_MENU_REL_LIST}$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(cb_menu_rcfg_list, pattern=f"^{CB_MENU_RCFG_LIST}$")
     )
