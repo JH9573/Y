@@ -168,6 +168,94 @@ class DnsAccount(Base):
     )
 
 
+class ReleaseSource(Base):
+    """GitHub Release 分发源(私有仓库)。
+
+    repo 形如 owner/name,作为唯一标识与展示名。
+    token 为 fine-grained PAT,加密存储,仓库权限至少需要 Contents:Read。
+    """
+
+    __tablename__ = "release_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    repo: Mapped[str] = mapped_column(String(140), unique=True, nullable=False)
+    token: Mapped[str] = mapped_column(Text, nullable=False)  # 加密存储
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+class OssConfig(Base):
+    """阿里云 OSS 分发配置(单行表,取第一条生效)。
+
+    通过 bot 交互录入,优先于 .env 中的 OSS_* 配置。
+    access_key_secret 加密存储;access_key_id 明文,展示时打码。
+    """
+
+    __tablename__ = "oss_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    region: Mapped[str] = mapped_column(String(32), nullable=False)
+    bucket: Mapped[str] = mapped_column(String(64), nullable=False)
+    access_key_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    access_key_secret: Mapped[str] = mapped_column(Text, nullable=False)  # 加密存储
+    public_base_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    prefix: Mapped[str] = mapped_column(String(64), nullable=False, default="releases")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+class CosConfig(Base):
+    """腾讯云 COS 配置(单行表,取第一条生效)。
+
+    远程配置(JSON 文件)功能使用。通过 bot 交互录入。
+    secret_key 加密存储;secret_id 明文,展示时打码。
+    bucket 需带 APPID 后缀(如 mycfg-1250000000)。
+    """
+
+    __tablename__ = "cos_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    region: Mapped[str] = mapped_column(String(32), nullable=False)
+    bucket: Mapped[str] = mapped_column(String(64), nullable=False)
+    secret_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    secret_key: Mapped[str] = mapped_column(Text, nullable=False)  # 加密存储
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+class RemoteConfigFile(Base):
+    """受管的远程 JSON 配置文件(COS 上的 object key)。"""
+
+    __tablename__ = "remote_config_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    path: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+
 class OperationLog(Base):
     __tablename__ = "operation_logs"
 
