@@ -5,9 +5,7 @@
 """
 from __future__ import annotations
 
-import asyncio
 import logging
-from functools import wraps
 
 from telegram.ext import (
     Application,

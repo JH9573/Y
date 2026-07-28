@@ -14,7 +14,6 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
-    filters,
 )
 
 from ..core.ssh import SSHError
