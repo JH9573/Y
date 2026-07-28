@@ -62,7 +62,7 @@ CB_PANEL_PREFIX = "pnl:"  # pnl:<id> -> 进入面板菜单
 CB_DEL_PANEL = "delpnl:"  # delpnl:<id>
 CB_DEL_PANEL_OK = "delpnlok:"  # delpnlok:<id>
 CB_BACK_PANELS = "back:panels"
-CB_PANEL_NODES = "pnln:"  # pnln:<panel_id> -> v2node 列表
+CB_PANEL_NODES = "pnln:"  # pnln:<panel_id>[:<page>] -> v2node 列表(省略页码=上次浏览的页)
 CB_PANEL_NODE = "pnldd:"  # pnldd:<panel_id>:<node_id> -> 节点详情
 CB_PANEL_NODE_SHOW = "pnlsh:"  # pnlsh:<panel_id>:<node_id>:<0|1> -> 切换上下架
 CB_PANEL_NODE_DROP = "pnldrop:"  # pnldrop:<panel_id>:<node_id> -> 删除二次确认
