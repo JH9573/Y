@@ -30,10 +30,10 @@ from .handlers import (
     cos_config,
     dns,
     dns_record,
-    edit_remote_file,
     edit_dns_account,
     edit_panel,
     edit_panel_node,
+    edit_remote_file,
     edit_server,
     firewall,
     install,
@@ -50,11 +50,10 @@ from .handlers import (
     uninstall,
     update_bot,
 )
-from .handlers.common import AppContext, CTX_KEY, is_not_modified
+from .handlers.common import CTX_KEY, AppContext, is_not_modified
 from .services.cloudflare_api import CloudflareClient
 from .services.github_release import GitHubReleaseClient
 from .services.v2board_api import V2BoardClient
-
 
 log = logging.getLogger(__name__)
 
@@ -133,12 +132,22 @@ async def _post_init(application: Application) -> None:
     await update_bot.notify_restart_done(application)
 
 
+async def _record_host_key(server, fingerprint: str) -> None:
+    """首次连上某台服务器时把主机密钥指纹落库(TOFU)。"""
+    async with crud.session() as s:
+        await crud.set_server_host_key(s, server.id, fingerprint)
+        await s.commit()
+    log.info("已记录 %s 的主机密钥指纹 %s", server.name, fingerprint)
+
+
 def build_application() -> Application:
     cfg = load_config()
     _setup_logging(cfg.log_level)
 
     crypto = Crypto(cfg.cred_encryption_key)
-    ssh_client = SSHClient(crypto, timeout=cfg.ssh_timeout)
+    ssh_client = SSHClient(
+        crypto, timeout=cfg.ssh_timeout, on_host_key=_record_host_key
+    )
     v2board_client = V2BoardClient(crypto, timeout=cfg.ssh_timeout)
     cloudflare_client = CloudflareClient(crypto, timeout=cfg.ssh_timeout)
     github_client = GitHubReleaseClient(crypto, timeout=cfg.ssh_timeout)

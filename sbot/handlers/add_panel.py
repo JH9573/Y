@@ -37,7 +37,6 @@ from .common import (
     main_menu_kb,
 )
 
-
 log = logging.getLogger(__name__)
 
 
@@ -204,8 +203,8 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 creds_tail = f"\n通信凭据已记录(api_host={api_host})。"
             else:
                 creds_tail = (
-                    f"\n⚠️ 面板未配置 server_token,无法用于服务器添加节点。"
-                    f"\n  请到面板「系统配置 → 节点通信」填写后,在面板菜单点「🔄 同步通信凭据」。"
+                    "\n⚠️ 面板未配置 server_token,无法用于服务器添加节点。"
+                    "\n  请到面板「系统配置 → 节点通信」填写后,在面板菜单点「🔄 同步通信凭据」。"
                 )
         await s.commit()
 

@@ -15,13 +15,12 @@ import hmac
 import logging
 import mimetypes
 import os
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import AsyncIterator
 from urllib.parse import quote
 from xml.etree import ElementTree
 
 import httpx
-
 
 log = logging.getLogger(__name__)
 

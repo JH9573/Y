@@ -21,14 +21,14 @@ from .common import (
     CB_MENU_DNS_ADD,
     CB_MENU_DNS_LIST,
     CB_MENU_OSS_CFG,
+    CB_MENU_PNL_ADD,
     CB_MENU_PNL_LIST,
     CB_MENU_RCFG_ADD,
     CB_MENU_RCFG_LIST,
     CB_MENU_REL_ADD,
     CB_MENU_REL_LIST,
-    CB_MENU_SRV_LIST,
-    CB_MENU_PNL_ADD,
     CB_MENU_SRV_ADD,
+    CB_MENU_SRV_LIST,
     CB_NOOP,
     MENU_CANCEL,
     MENU_DNS_GROUP,
@@ -39,7 +39,6 @@ from .common import (
     MENU_SERVER_GROUP,
     main_menu_kb,
 )
-
 
 log = logging.getLogger(__name__)
 

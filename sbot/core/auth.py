@@ -6,12 +6,11 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from functools import wraps
-from typing import Awaitable, Callable
 
 from telegram import Update
 from telegram.ext import ContextTypes
-
 
 log = logging.getLogger(__name__)
 

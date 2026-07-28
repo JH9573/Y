@@ -11,6 +11,7 @@ from telegram.ext import (
 )
 
 from ..db import crud
+from ..services.v2node import ACTIONS
 from .common import (
     CB_BACK_SERVERS,
     CB_DEL_SERVER,
@@ -22,11 +23,8 @@ from .common import (
     CB_SERVER_PREFIX,
     CB_UNINSTALL_START,
     CB_V2NODE_MENU,
-    get_ctx,
     main_menu_kb,
 )
-from ..services.v2node import ACTIONS
-
 
 log = logging.getLogger(__name__)
 
@@ -256,7 +254,6 @@ async def cb_delete_server_do(
     query = update.callback_query
     await query.answer()
     server_id = int(query.data.split(":", 1)[1])
-    ctx = get_ctx(context)
     async with crud.session() as s:
         server = await crud.get_server(s, server_id)
         if server is None:

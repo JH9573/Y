@@ -20,7 +20,6 @@ import httpx
 from ..core.crypto import Crypto
 from ..db.models import DnsAccount
 
-
 log = logging.getLogger(__name__)
 
 

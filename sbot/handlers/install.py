@@ -31,7 +31,6 @@ from .common import (
 from .firewall import port_check_block
 from .pickers import render_node_picker, render_panel_picker
 
-
 log = logging.getLogger(__name__)
 
 

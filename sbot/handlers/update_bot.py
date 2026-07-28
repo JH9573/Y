@@ -38,7 +38,6 @@ from .common import (
     truncate,
 )
 
-
 log = logging.getLogger(__name__)
 
 # requirements.txt 位于 sbot 包目录下
@@ -63,7 +62,7 @@ async def _run(*args: str, timeout: int = 120):
     )
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         return 1, f"命令超时({timeout}s): {' '.join(args)}"
     return proc.returncode, out.decode(errors="replace").strip()

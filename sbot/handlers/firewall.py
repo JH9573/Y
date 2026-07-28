@@ -14,7 +14,6 @@ from ..db import crud
 from ..services import firewall
 from .common import CB_FW_OPEN, CB_SERVER_PREFIX, get_ctx
 
-
 log = logging.getLogger(__name__)
 
 _CLOUD_NOTE = "⚠ 云厂商安全组在服务器之外,SSH 改不了,需自行在控制台放行。"

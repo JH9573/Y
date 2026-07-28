@@ -6,16 +6,15 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncIterator
 
 from ..config import BACKUPS_DIR
 from ..core.ssh import SSHError, SSHRunner
 from ..db.models import Server
 from .v2node_config import CONFIG_PATH
-
 
 log = logging.getLogger(__name__)
 

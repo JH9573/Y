@@ -35,7 +35,6 @@ from .common import (
     truncate,
 )
 
-
 log = logging.getLogger(__name__)
 
 # user_data 里记住每个面板最近浏览的页码,详情/删除/同步后能回到原页

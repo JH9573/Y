@@ -32,7 +32,6 @@ from .common import (
     main_menu_kb,
 )
 
-
 log = logging.getLogger(__name__)
 
 

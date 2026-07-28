@@ -22,7 +22,6 @@ from .common import (
     humanize_age,
 )
 
-
 log = logging.getLogger(__name__)
 
 

@@ -15,10 +15,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from ..core.ssh import SSHError, SSHRunner
 from ..db.models import Server
 from .v2node import IS_ACTIVE_CMD
-from ..core.ssh import SSHError, SSHRunner
-
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +48,7 @@ class NodeEntry:
         }
 
     @classmethod
-    def from_dict(cls, obj: dict[str, Any]) -> "NodeEntry":
+    def from_dict(cls, obj: dict[str, Any]) -> NodeEntry:
         try:
             return cls(
                 api_host=str(obj["ApiHost"]),

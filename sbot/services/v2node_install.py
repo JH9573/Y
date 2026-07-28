@@ -8,14 +8,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import AsyncIterator
 
 from ..core.ssh import SSHError, SSHRunner
 from ..db.models import Server
 from .v2node import IS_ACTIVE_CMD
 from .v2node_config import CONFIG_PATH, NodeEntry, serialize_config
-
 
 log = logging.getLogger(__name__)
 

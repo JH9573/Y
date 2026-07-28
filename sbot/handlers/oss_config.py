@@ -28,7 +28,6 @@ from ..db import crud
 from ..services.oss_api import OSSAPIError, OSSClient
 from .common import (
     ANY_MENU_TEXT_FILTER,
-    AppContext,
     CB_MENU_OSS_CFG,
     CB_OSS_CLEAR,
     CB_OSS_CLEAR_OK,
@@ -36,11 +35,11 @@ from .common import (
     CB_OSS_EDIT,
     CB_OSS_SAVE,
     NON_MENU_TEXT_FILTER,
+    AppContext,
     cancel_only_kb,
     get_ctx,
     main_menu_kb,
 )
-
 
 log = logging.getLogger(__name__)
 

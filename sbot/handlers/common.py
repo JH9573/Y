@@ -1,19 +1,18 @@
 """handler 共享的工具与上下文容器。"""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Sequence
 
 from telegram import InlineKeyboardButton, KeyboardButton, ReplyKeyboardMarkup
 from telegram.error import BadRequest
 from telegram.ext import filters
 
-from ..core.timeutil import utcnow
-
 from ..config import Config
 from ..core.crypto import Crypto
 from ..core.ssh import SSHClient
+from ..core.timeutil import utcnow
 from ..services.cloudflare_api import CloudflareClient
 from ..services.github_release import GitHubReleaseClient
 from ..services.v2board_api import V2BoardClient

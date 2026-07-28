@@ -18,7 +18,6 @@ from .common import (
     truncate,
 )
 
-
 # 每条日志占两行(标题 + detail),一页 10 条正好一屏
 LOGS_PER_PAGE = 10
 DETAIL_LIMIT = 100

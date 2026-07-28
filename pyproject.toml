@@ -1,0 +1,38 @@
+[tool.pytest.ini_options]
+# 让 tests/ 里能直接 import sbot,不必装成包
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # ConversationHandler(per_message=False) + CallbackQueryHandler 的固有告警,
+    # 本项目的对话都是「一条消息多个按钮」,这个组合是对的
+    "ignore::telegram.warnings.PTBUserWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"  # datetime.UTC 等 3.11 专属写法不要引入
+exclude = ["sbot/backups"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "W",    # warnings
+    "I",    # isort
+    "B",    # bugbear
+    "UP",   # pyupgrade
+    "C4",   # comprehensions
+]
+ignore = [
+    "E501",   # 行长由 line-length 控制,中文注释算宽度不准,交给人判断
+    "UP017",  # datetime.UTC 需要 3.11,保持 timezone.utc
+    "B008",   # FastAPI 风格的默认值调用,本项目不涉及
+    "UP038",  # isinstance(x, (A, B)) 可读性更好
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 对话流按状态分块,导入顺序按「常量 -> 流程 -> 步骤」组织,不强制 isort
+"sbot/handlers/edit_panel_node/*" = ["I001"]
+"tests/*" = ["B011"]

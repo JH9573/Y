@@ -28,7 +28,6 @@ from .common import (
     safe_edit,
 )
 
-
 log = logging.getLogger(__name__)
 
 

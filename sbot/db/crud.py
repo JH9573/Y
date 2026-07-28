@@ -5,7 +5,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Optional
+from collections.abc import Iterable
+from datetime import datetime, timedelta
 
 from sqlalchemy import delete, event, func, select
 from sqlalchemy.ext.asyncio import (
@@ -14,8 +15,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from datetime import datetime, timedelta
-
+from ..core.redact import redact
 from ..core.timeutil import utcnow
 from .models import (
     Base,
@@ -30,7 +30,6 @@ from .models import (
     RemoteConfigFile,
     Server,
 )
-
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +74,10 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "api_host": "TEXT",
         "api_key": "TEXT",
     },
+    "servers": {
+        "key_passphrase": "TEXT",
+        "host_key": "TEXT",
+    },
 }
 
 
@@ -107,11 +110,11 @@ async def list_servers(s: AsyncSession) -> list[Server]:
     return list(result.scalars().all())
 
 
-async def get_server(s: AsyncSession, server_id: int) -> Optional[Server]:
+async def get_server(s: AsyncSession, server_id: int) -> Server | None:
     return await s.get(Server, server_id)
 
 
-async def get_server_by_name(s: AsyncSession, name: str) -> Optional[Server]:
+async def get_server_by_name(s: AsyncSession, name: str) -> Server | None:
     result = await s.execute(select(Server).where(Server.name == name))
     return result.scalar_one_or_none()
 
@@ -125,6 +128,8 @@ async def create_server(
     username: str,
     auth_type: str,
     credential: str,
+    key_passphrase: str | None = None,
+    host_key: str | None = None,
     v2node_installed: bool = False,
     status: str = "active",
 ) -> Server:
@@ -135,6 +140,8 @@ async def create_server(
         username=username,
         auth_type=auth_type,
         credential=credential,
+        key_passphrase=key_passphrase,
+        host_key=host_key,
         v2node_installed=v2node_installed,
         status=status,
     )
@@ -153,14 +160,20 @@ async def update_server(
     s: AsyncSession,
     server_id: int,
     *,
-    name: Optional[str] = None,
-    host: Optional[str] = None,
-    username: Optional[str] = None,
-    port: Optional[int] = None,
-    auth_type: Optional[str] = None,
-    credential: Optional[str] = None,
-) -> Optional[Server]:
-    """更新服务器的可改字段;只更新传入的非 None 项。"""
+    name: str | None = None,
+    host: str | None = None,
+    username: str | None = None,
+    port: int | None = None,
+    auth_type: str | None = None,
+    credential: str | None = None,
+    key_passphrase: str | None = None,
+    clear_key_passphrase: bool = False,
+) -> Server | None:
+    """更新服务器的可改字段;只更新传入的非 None 项。
+
+    改了认证方式 / 凭据后主机不变,故 host_key 不动;要重置指纹用
+    clear_server_host_key。clear_key_passphrase 用于换成不带口令的私钥。
+    """
     server = await s.get(Server, server_id)
     if server is None:
         return None
@@ -176,6 +189,10 @@ async def update_server(
         server.auth_type = auth_type
     if credential is not None:
         server.credential = credential
+    if key_passphrase is not None:
+        server.key_passphrase = key_passphrase
+    elif clear_key_passphrase:
+        server.key_passphrase = None
     return server
 
 
@@ -185,6 +202,22 @@ async def set_v2node_installed(
     server = await s.get(Server, server_id)
     if server is not None:
         server.v2node_installed = installed
+
+
+async def set_server_host_key(
+    s: AsyncSession, server_id: int, fingerprint: str
+) -> None:
+    """记录首次连接看到的主机密钥指纹。"""
+    server = await s.get(Server, server_id)
+    if server is not None:
+        server.host_key = fingerprint
+
+
+async def clear_server_host_key(s: AsyncSession, server_id: int) -> None:
+    """清掉已记录的指纹,下次连接重新 TOFU(服务器重装后用)。"""
+    server = await s.get(Server, server_id)
+    if server is not None:
+        server.host_key = None
 
 
 async def delete_server(s: AsyncSession, server_id: int) -> None:
@@ -202,13 +235,13 @@ async def list_nodes(s: AsyncSession, server_id: int) -> list[Node]:
     return list(result.scalars().all())
 
 
-async def get_node(s: AsyncSession, node_pk: int) -> Optional[Node]:
+async def get_node(s: AsyncSession, node_pk: int) -> Node | None:
     return await s.get(Node, node_pk)
 
 
 async def find_node(
     s: AsyncSession, server_id: int, api_host: str, node_id: int
-) -> Optional[Node]:
+) -> Node | None:
     result = await s.execute(
         select(Node).where(
             Node.server_id == server_id,
@@ -283,11 +316,11 @@ async def list_panels(s: AsyncSession) -> list[Panel]:
     return list(result.scalars().all())
 
 
-async def get_panel(s: AsyncSession, panel_id: int) -> Optional[Panel]:
+async def get_panel(s: AsyncSession, panel_id: int) -> Panel | None:
     return await s.get(Panel, panel_id)
 
 
-async def get_panel_by_name(s: AsyncSession, name: str) -> Optional[Panel]:
+async def get_panel_by_name(s: AsyncSession, name: str) -> Panel | None:
     result = await s.execute(select(Panel).where(Panel.name == name))
     return result.scalar_one_or_none()
 
@@ -364,7 +397,7 @@ async def list_panel_nodes(s: AsyncSession, panel_id: int) -> list[PanelNode]:
 
 async def get_panel_node(
     s: AsyncSession, panel_id: int, node_id: int
-) -> Optional[PanelNode]:
+) -> PanelNode | None:
     result = await s.execute(
         select(PanelNode).where(
             PanelNode.panel_id == panel_id,
@@ -410,7 +443,7 @@ async def delete_panel_node(
 
 async def latest_node_sync_at(
     s: AsyncSession, panel_id: int
-) -> Optional[datetime]:
+) -> datetime | None:
     """最近一次成功同步的时间,空表返回 None。"""
     result = await s.execute(
         select(PanelNode.synced_at)
@@ -428,13 +461,13 @@ async def list_dns_accounts(s: AsyncSession) -> list[DnsAccount]:
     return list(result.scalars().all())
 
 
-async def get_dns_account(s: AsyncSession, account_id: int) -> Optional[DnsAccount]:
+async def get_dns_account(s: AsyncSession, account_id: int) -> DnsAccount | None:
     return await s.get(DnsAccount, account_id)
 
 
 async def get_dns_account_by_name(
     s: AsyncSession, name: str
-) -> Optional[DnsAccount]:
+) -> DnsAccount | None:
     result = await s.execute(select(DnsAccount).where(DnsAccount.name == name))
     return result.scalar_one_or_none()
 
@@ -487,13 +520,13 @@ async def list_release_sources(s: AsyncSession) -> list[ReleaseSource]:
 
 async def get_release_source(
     s: AsyncSession, source_id: int
-) -> Optional[ReleaseSource]:
+) -> ReleaseSource | None:
     return await s.get(ReleaseSource, source_id)
 
 
 async def get_release_source_by_repo(
     s: AsyncSession, repo: str
-) -> Optional[ReleaseSource]:
+) -> ReleaseSource | None:
     result = await s.execute(
         select(ReleaseSource).where(ReleaseSource.repo == repo)
     )
@@ -520,7 +553,7 @@ async def delete_release_source(s: AsyncSession, source_id: int) -> None:
 
 # ---------- oss config ----------
 
-async def get_oss_config(s: AsyncSession) -> Optional[OssConfig]:
+async def get_oss_config(s: AsyncSession) -> OssConfig | None:
     """单行配置,取第一条。"""
     result = await s.execute(select(OssConfig).order_by(OssConfig.id).limit(1))
     return result.scalar_one_or_none()
@@ -558,7 +591,7 @@ async def delete_oss_config(s: AsyncSession) -> None:
 
 # ---------- cos config ----------
 
-async def get_cos_config(s: AsyncSession) -> Optional[CosConfig]:
+async def get_cos_config(s: AsyncSession) -> CosConfig | None:
     """单行配置,取第一条。"""
     result = await s.execute(select(CosConfig).order_by(CosConfig.id).limit(1))
     return result.scalar_one_or_none()
@@ -601,13 +634,13 @@ async def list_remote_files(s: AsyncSession) -> list[RemoteConfigFile]:
 
 async def get_remote_file(
     s: AsyncSession, file_id: int
-) -> Optional[RemoteConfigFile]:
+) -> RemoteConfigFile | None:
     return await s.get(RemoteConfigFile, file_id)
 
 
 async def get_remote_file_by_path(
     s: AsyncSession, path: str
-) -> Optional[RemoteConfigFile]:
+) -> RemoteConfigFile | None:
     result = await s.execute(
         select(RemoteConfigFile).where(RemoteConfigFile.path == path)
     )
@@ -638,13 +671,14 @@ async def add_log(
     result: str,
     detail: str | None = None,
 ) -> None:
+    """写一条操作日志。detail 统一脱敏,避免第三方异常原文把凭据带进明文表。"""
     s.add(
         OperationLog(
             user_id=user_id,
             server_id=server_id,
             action=action,
             result=result,
-            detail=detail,
+            detail=redact(detail),
         )
     )
 

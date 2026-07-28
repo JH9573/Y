@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 
 from ..core.ssh import SSHError, SSHRunner
 
-
 # v2node 进程名,用于从 ss / netstat 输出里挑出它监听的端口
 _PROC_NAME = "v2node"
 _VALID_PROTO = ("tcp", "udp")

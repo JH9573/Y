@@ -26,7 +26,6 @@ from ..db import crud
 from ..services.cos_api import COSAPIError, COSClient
 from .common import (
     ANY_MENU_TEXT_FILTER,
-    AppContext,
     CB_COS_CLEAR,
     CB_COS_CLEAR_OK,
     CB_COS_DROP,
@@ -34,11 +33,11 @@ from .common import (
     CB_COS_SAVE,
     CB_MENU_COS_CFG,
     NON_MENU_TEXT_FILTER,
+    AppContext,
     cancel_only_kb,
     get_ctx,
     main_menu_kb,
 )
-
 
 log = logging.getLogger(__name__)
 

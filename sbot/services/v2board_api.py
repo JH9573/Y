@@ -19,7 +19,6 @@ from ..core.crypto import Crypto
 from ..db import crud
 from ..db.models import Panel
 
-
 log = logging.getLogger(__name__)
 
 
