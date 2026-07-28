@@ -26,6 +26,7 @@ from .common import (
     CB_UNINSTALL_START,
     NON_MENU_TEXT_FILTER,
     get_ctx,
+    safe_edit,
 )
 
 
@@ -88,12 +89,11 @@ async def step_confirm_name(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     failure_detail: str | None = None
     try:
-        async for step in uninstall_v2node(ctx.ssh, server):
-            progress_lines.append(f"• {step.step}: {step.detail}")
-            try:
-                await msg.edit_text("\n".join(progress_lines))
-            except Exception:  # noqa: BLE001
-                pass
+        # 停服务 / 删单元 / 清目录十余条命令共用一条 SSH 连接
+        async with ctx.ssh.connection(server) as conn:
+            async for step in uninstall_v2node(conn, server):
+                progress_lines.append(f"• {step.step}: {step.detail}")
+                await safe_edit(msg, "\n".join(progress_lines))
         success = True
         progress_lines.append("\n✅ v2node 已卸载,服务器仍保留在列表中。")
     except UninstallError as exc:

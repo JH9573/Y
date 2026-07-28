@@ -25,16 +25,14 @@ from .common import (
     CB_INSTALL_START,
     CB_SERVER_PREFIX,
     get_ctx,
+    safe_edit,
+    split_page_arg,
 )
 from .firewall import port_check_block
+from .pickers import render_node_picker, render_panel_picker
 
 
 log = logging.getLogger(__name__)
-
-
-# 按钮一屏上限,避免过多按钮
-PANEL_LIMIT = 30
-NODE_LIST_LIMIT = 50
 
 
 # ---------- step 1: 选面板 ----------
@@ -43,7 +41,8 @@ async def cb_install_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """点了「安装 v2node」,展示面板列表。"""
     query = update.callback_query
     await query.answer()
-    server_id = int(query.data.split(":", 1)[1])
+    (server_id_s,), page = split_page_arg(query.data.split(":", 1)[1], 1)
+    server_id = int(server_id_s)
 
     async with crud.session() as s:
         server = await crud.get_server(s, server_id)
@@ -52,52 +51,24 @@ async def cb_install_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         panels = await crud.list_panels(s)
 
-    back_kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(
-            "⬅ 返回服务器菜单",
-            callback_data=f"{CB_SERVER_PREFIX}{server_id}",
-        )]]
+    back = InlineKeyboardButton(
+        "⬅ 返回服务器菜单", callback_data=f"{CB_SERVER_PREFIX}{server_id}"
     )
-    if not panels:
-        await query.edit_message_text(
-            "尚未登记任何面板。请先在「面板管理 → 添加面板」登记一个。",
-            reply_markup=back_kb,
-        )
-        return
-
-    rows: list[list[InlineKeyboardButton]] = []
-    skipped: list[str] = []
-    for p in panels[:PANEL_LIMIT]:
-        if not p.api_host or not p.api_key:
-            skipped.append(p.name)
-            continue
-        rows.append([InlineKeyboardButton(
-            f"{p.name} ({p.api_host})",
-            callback_data=f"{CB_INSTALL_PANEL}{server_id}:{p.id}",
-        )])
-    rows.append([InlineKeyboardButton(
-        "⬅ 返回服务器菜单",
-        callback_data=f"{CB_SERVER_PREFIX}{server_id}",
-    )])
-
-    lines = [
-        f"将在服务器「{server.name}」上首次安装 v2node。",
-        "bot 会按步骤检测依赖 → 下载二进制 → 注册 systemd → 启动。",
-        "",
-        "请选择首节点所属面板:",
-    ]
-    if skipped:
-        lines.append("")
-        lines.append("以下面板因缺通信凭据(api_host / api_key)被跳过:")
-        for n in skipped:
-            lines.append(f"  • {n}")
-        lines.append("可去「面板管理」对应面板点「🔄 同步通信凭据」补上。")
-    if not any(r for r in rows[:-1]):
-        # 全部都被跳过
-        await query.edit_message_text("\n".join(lines), reply_markup=back_kb)
-        return
-    await query.edit_message_text(
-        "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows)
+    await render_panel_picker(
+        query,
+        panels=panels,
+        page=page,
+        intro=[
+            f"将在服务器「{server.name}」上首次安装 v2node。",
+            "bot 会按步骤检测依赖 → 下载二进制 → 注册 systemd → 启动。",
+            "",
+            "请选择首节点所属面板:",
+        ],
+        pick_cb=lambda p: f"{CB_INSTALL_PANEL}{server_id}:{p.id}",
+        page_cb_prefix=f"{CB_INSTALL_START}{server_id}:",
+        back=back,
+        empty_text="尚未登记任何面板。请先在「面板管理 → 添加面板」登记一个。",
+        missing_creds_hint="可去「面板管理」对应面板点「🔄 同步通信凭据」补上。",
     )
 
 
@@ -108,8 +79,9 @@ async def cb_install_pick_panel(
 ) -> None:
     query = update.callback_query
     await query.answer()
-    _, payload = query.data.split(":", 1)
-    server_id_s, panel_id_s = payload.split(":", 1)
+    (server_id_s, panel_id_s), page = split_page_arg(
+        query.data.split(":", 1)[1], 2
+    )
     server_id = int(server_id_s)
     panel_id = int(panel_id_s)
 
@@ -121,45 +93,24 @@ async def cb_install_pick_panel(
             return
         nodes = await crud.list_panel_nodes(s, panel_id)
 
-    back_kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(
-            "⬅ 重选面板",
-            callback_data=f"{CB_INSTALL_START}{server_id}",
-        )]]
+    back = InlineKeyboardButton(
+        "⬅ 重选面板", callback_data=f"{CB_INSTALL_START}{server_id}"
     )
-    if not nodes:
-        await query.edit_message_text(
+    await render_node_picker(
+        query,
+        nodes=nodes,
+        page=page,
+        intro=[
+            f"面板「{panel.name}」下的 v2node 节点(共 {len(nodes)}),"
+            f"为服务器「{server.name}」选首节点:",
+        ],
+        pick_cb=lambda n: f"{CB_INSTALL_NODE}{server_id}:{panel_id}:{n.node_id}",
+        page_cb_prefix=f"{CB_INSTALL_PANEL}{server_id}:{panel_id}:",
+        back=back,
+        empty_text=(
             f"面板「{panel.name}」本地未缓存 v2node 节点。\n"
-            "请先进「面板管理」对应面板,点「📋 节点列表」→「🔄 同步」。",
-            reply_markup=back_kb,
-        )
-        return
-
-    rows: list[list[InlineKeyboardButton]] = []
-    for n in nodes[:NODE_LIST_LIMIT]:
-        relay = "🔁" if n.parent_id else ""
-        show = "✅" if n.show else "❌"
-        label = f"{show}{relay} #{n.node_id} {n.name}"
-        rows.append([InlineKeyboardButton(
-            label,
-            callback_data=(
-                f"{CB_INSTALL_NODE}{server_id}:{panel_id}:{n.node_id}"
-            ),
-        )])
-    if len(nodes) > NODE_LIST_LIMIT:
-        rows.append([InlineKeyboardButton(
-            f"(共 {len(nodes)},仅显示前 {NODE_LIST_LIMIT})",
-            callback_data="noop",
-        )])
-    rows.append([InlineKeyboardButton(
-        "⬅ 重选面板",
-        callback_data=f"{CB_INSTALL_START}{server_id}",
-    )])
-
-    await query.edit_message_text(
-        f"面板「{panel.name}」下的 v2node 节点(共 {len(nodes)}),"
-        f"为服务器「{server.name}」选首节点:",
-        reply_markup=InlineKeyboardMarkup(rows),
+            "请先进「面板管理」对应面板,点「📋 节点列表」→「🔄 同步」。"
+        ),
     )
 
 
@@ -258,18 +209,19 @@ async def cb_install_do(
     await query.edit_message_text("\n".join(progress_lines))
 
     failure_detail: str | None = None
+    fw_block: tuple[str, list[InlineKeyboardButton]] | None = None
     try:
-        async for step in install_v2node(ctx.ssh, server, params):
-            progress_lines.append(f"• {step.step}: {step.detail}")
-            try:
-                await query.edit_message_text("\n".join(progress_lines))
-            except Exception:  # noqa: BLE001
-                # Telegram 偶尔会拒绝相同内容的编辑,忽略
-                pass
-        success = True
-        result_text = (
-            "\n".join(progress_lines) + "\n\n✅ 安装完成,v2node 已启动。"
-        )
+        # 整个安装(十余条命令)+ 装完的端口体检共用一条 SSH 连接,
+        # 而不是每条命令重新握手一次
+        async with ctx.ssh.connection(server) as conn:
+            async for step in install_v2node(conn, server, params):
+                progress_lines.append(f"• {step.step}: {step.detail}")
+                await safe_edit(query, "\n".join(progress_lines))
+            success = True
+            result_text = (
+                "\n".join(progress_lines) + "\n\n✅ 安装完成,v2node 已启动。"
+            )
+            fw_block = await port_check_block(conn, server)
     except InstallError as exc:
         success = False
         failure_detail = str(exc)
@@ -309,27 +261,27 @@ async def cb_install_do(
         "⬅ 返回菜单", callback_data=f"{CB_SERVER_PREFIX}{server_id}"
     )
     rows: list[list[InlineKeyboardButton]] = []
-    if success:
-        fw_text, fw_buttons = await port_check_block(ctx.ssh, server)
+    if success and fw_block is not None:
+        fw_text, fw_buttons = fw_block
         result_text = f"{result_text}\n\n{fw_text}"
         if fw_buttons:
             rows.append(fw_buttons)
     rows.append([back_btn])
-    await query.edit_message_text(
-        result_text, reply_markup=InlineKeyboardMarkup(rows)
+    await safe_edit(
+        query, result_text, reply_markup=InlineKeyboardMarkup(rows)
     )
 
 
 def register(application, ctx) -> None:
     application.add_handler(
         CallbackQueryHandler(
-            cb_install_start, pattern=f"^{CB_INSTALL_START}\\d+$"
+            cb_install_start, pattern=f"^{CB_INSTALL_START}\\d+(:\\d+)?$"
         )
     )
     application.add_handler(
         CallbackQueryHandler(
             cb_install_pick_panel,
-            pattern=f"^{CB_INSTALL_PANEL}\\d+:\\d+$",
+            pattern=f"^{CB_INSTALL_PANEL}\\d+:\\d+(:\\d+)?$",
         )
     )
     application.add_handler(

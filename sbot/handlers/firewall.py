@@ -77,7 +77,9 @@ async def cb_fw_open(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     await query.edit_message_text("正在放行端口…")
-    manager, opened, failed = await firewall.open_unallowed(ctx.ssh, server)
+    # open_unallowed 内部要先体检再逐条放行,连发多条命令,复用一条连接
+    async with ctx.ssh.connection(server) as conn:
+        manager, opened, failed = await firewall.open_unallowed(conn, server)
 
     lines: list[str] = []
     if manager is None:

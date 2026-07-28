@@ -19,6 +19,7 @@ from telegram.ext import (
     MessageHandler,
 )
 
+from ..core.ssh import SSHError
 from ..db import crud
 from ..db.models import Server
 from ..services.v2node import INSTALLED_CHECK_CMD
@@ -184,8 +185,24 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         status="active",
         v2node_installed=False,
     )
-    ok = await ctx.ssh.check_connectivity(trial)
-    if not ok:
+    # 连通性测试 + 安装检测 + 读远程节点,原本要连三次;这里一条连接跑完,
+    # 建连失败即等价于连通性测试不通过。
+    remote_nodes: list | None = None
+    v2node_installed = False
+    try:
+        async with ctx.ssh.connection(trial) as conn:
+            try:
+                check = await conn.run(trial, INSTALLED_CHECK_CMD)
+                v2node_installed = check.stdout.strip() == "installed"
+            except SSHError:
+                v2node_installed = False
+            if v2node_installed:
+                try:
+                    remote_nodes = await read_remote_nodes(conn, trial)
+                except Exception:  # noqa: BLE001
+                    log.exception("导入节点失败,服务器 %s", data["name"])
+                    remote_nodes = None
+    except SSHError:
         await context.bot.send_message(
             chat_id=chat_id,
             text="SSH 连通性测试失败,服务器未登记。请检查地址、端口、用户名、凭据后重试。",
@@ -194,14 +211,7 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data.pop(KEY, None)
         return ConversationHandler.END
 
-    # 检测 v2node 是否已安装
-    try:
-        check = await ctx.ssh.run(trial, INSTALLED_CHECK_CMD)
-        v2node_installed = check.stdout.strip() == "installed"
-    except Exception:  # noqa: BLE001
-        v2node_installed = False
-
-    # 写库,并尝试导入节点
+    # 写库,并把刚读到的远程节点导入
     async with crud.session() as s:
         server = await crud.create_server(
             s,
@@ -213,11 +223,11 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             credential=data["credential"],
             v2node_installed=v2node_installed,
         )
-        # 写库后立即读取一次远程节点,导入到 nodes 表
         imported = 0
         if v2node_installed:
-            try:
-                remote_nodes = await read_remote_nodes(ctx.ssh, server)
+            if remote_nodes is None:
+                imported = -1  # 标记为导入失败
+            else:
                 items = [
                     {
                         "api_host": n.api_host,
@@ -228,9 +238,6 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                     for n in remote_nodes
                 ]
                 imported = await crud.replace_nodes(s, server.id, items)
-            except Exception:  # noqa: BLE001
-                log.exception("导入节点失败,服务器 %s", server.name)
-                imported = -1  # 标记为导入失败
         await crud.add_log(
             s,
             user_id=update.effective_user.id,

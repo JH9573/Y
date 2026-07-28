@@ -143,7 +143,8 @@ async def cb_node_delete_do(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     node_id = node.node_id
 
     try:
-        ok, msg = await remove_node_from_config(ctx.ssh, server, api_host, node_id)
+        async with ctx.ssh.connection(server) as conn:
+            ok, msg = await remove_node_from_config(conn, server, api_host, node_id)
     except (V2NodeConfigError, SSHError) as exc:
         ok, msg = False, str(exc)
 

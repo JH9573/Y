@@ -4,17 +4,19 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Iterable, Optional
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, event, func, select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from ..core.timeutil import utcnow
 from .models import (
     Base,
     CosConfig,
@@ -30,35 +32,66 @@ from .models import (
 )
 
 
+log = logging.getLogger(__name__)
+
 _engine = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+def _apply_sqlite_pragmas(dbapi_conn, _record) -> None:
+    """每条新连接都要设的 SQLite PRAGMA。
+
+    handler 现在是并发处理的(见 main.build_application),默认的 rollback
+    journal 下「一写多读」会直接抛 database is locked,所以:
+    - journal_mode=WAL: 读写不再互斥(该设置写进库文件头,持久生效)
+    - busy_timeout:    真的撞上写锁时先等一会儿,而不是立刻报错
+    """
+    cur = dbapi_conn.cursor()
+    try:
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+    finally:
+        cur.close()
 
 
 async def init_db(db_url: str) -> None:
     """初始化引擎,建表。idempotent。"""
     global _engine, _session_factory
     _engine = create_async_engine(db_url, future=True)
+    if db_url.startswith("sqlite"):
+        event.listen(_engine.sync_engine, "connect", _apply_sqlite_pragmas)
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await _migrate_panels(conn)
+        await _ensure_columns(conn)
 
 
-async def _migrate_panels(conn) -> None:
-    """对老库补齐 panels 表的新列(SQLite ALTER TABLE)。
+# 建表之后补加的列。create_all 只建新表、不会 ALTER 已存在的表,所以每次给
+# 已有模型加列,都必须在这里登记一份 "列名 -> 列定义",老库才会被补齐。
+# 只支持 ADD COLUMN 能表达的变更(可空、或带常量默认值);改类型 / 加约束
+# 需要走重建表,那种情况请单独写迁移。
+ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "panels": {
+        "api_host": "TEXT",
+        "api_key": "TEXT",
+    },
+}
 
-    create_all 不会 ALTER 已存在的表,所以这里手动补 api_host / api_key。
-    """
-    result = await conn.exec_driver_sql("PRAGMA table_info(panels)")
-    cols = {row[1] for row in result.fetchall()}
-    if "api_host" not in cols:
-        await conn.exec_driver_sql(
-            "ALTER TABLE panels ADD COLUMN api_host TEXT"
-        )
-    if "api_key" not in cols:
-        await conn.exec_driver_sql(
-            "ALTER TABLE panels ADD COLUMN api_key TEXT"
-        )
+
+async def _ensure_columns(conn) -> None:
+    """按 ADDED_COLUMNS 给老库补列,已存在的跳过。idempotent。"""
+    for table, columns in ADDED_COLUMNS.items():
+        result = await conn.exec_driver_sql(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in result.fetchall()}
+        if not existing:  # 表还不存在(create_all 会建),无需补列
+            continue
+        for name, ddl in columns.items():
+            if name in existing:
+                continue
+            await conn.exec_driver_sql(
+                f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"
+            )
+            log.info("已为老库补列: %s.%s %s", table, name, ddl)
 
 
 def session() -> AsyncSession:
@@ -280,7 +313,7 @@ async def create_panel(
         api_host=api_host,
         api_key=api_key,
         auth_data=auth_data,
-        auth_data_updated_at=datetime.utcnow() if auth_data else None,
+        auth_data_updated_at=utcnow() if auth_data else None,
     )
     s.add(panel)
     await s.flush()
@@ -291,7 +324,7 @@ async def update_panel_auth(s: AsyncSession, panel_id: int, auth_data: str) -> N
     panel = await s.get(Panel, panel_id)
     if panel is not None:
         panel.auth_data = auth_data
-        panel.auth_data_updated_at = datetime.utcnow()
+        panel.auth_data_updated_at = utcnow()
 
 
 async def update_panel(
@@ -349,7 +382,7 @@ async def replace_panel_nodes(
     """以远程为准覆盖该面板的节点缓存,返回最终节点数量。"""
     await s.execute(delete(PanelNode).where(PanelNode.panel_id == panel_id))
     count = 0
-    now = datetime.utcnow()
+    now = utcnow()
     for item in items:
         payload = dict(item)
         payload.setdefault("synced_at", now)
@@ -616,8 +649,40 @@ async def add_log(
     )
 
 
-async def recent_logs(s: AsyncSession, limit: int = 20) -> list[OperationLog]:
+# 操作日志保留天数。日志只增不减会让库无限膨胀,启动时清理一次。
+LOG_RETENTION_DAYS = 90
+
+
+def _log_filter(stmt, only_failed: bool):
+    return stmt.where(OperationLog.result != "success") if only_failed else stmt
+
+
+async def count_logs(s: AsyncSession, *, only_failed: bool = False) -> int:
+    stmt = _log_filter(select(func.count()).select_from(OperationLog), only_failed)
+    return int((await s.execute(stmt)).scalar_one())
+
+
+async def list_logs(
+    s: AsyncSession,
+    *,
+    limit: int,
+    offset: int = 0,
+    only_failed: bool = False,
+) -> list[OperationLog]:
+    """按时间倒序分页取日志。"""
+    stmt = _log_filter(select(OperationLog), only_failed)
     result = await s.execute(
-        select(OperationLog).order_by(OperationLog.id.desc()).limit(limit)
+        stmt.order_by(OperationLog.id.desc()).limit(limit).offset(offset)
     )
     return list(result.scalars().all())
+
+
+async def prune_logs(
+    s: AsyncSession, keep_days: int = LOG_RETENTION_DAYS
+) -> int:
+    """删除 keep_days 之前的日志,返回删除条数。"""
+    cutoff = utcnow() - timedelta(days=keep_days)
+    result = await s.execute(
+        delete(OperationLog).where(OperationLog.created_at < cutoff)
+    )
+    return result.rowcount or 0

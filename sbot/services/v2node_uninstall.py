@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from ..config import BACKUPS_DIR
-from ..core.ssh import SSHClient, SSHError
+from ..core.ssh import SSHError, SSHRunner
 from ..db.models import Server
 from .v2node_config import CONFIG_PATH
 
@@ -39,7 +39,7 @@ def _backup_filename(server_name: str) -> Path:
     return BACKUPS_DIR / f"{safe}-{ts}-config.json"
 
 
-async def _run(ssh: SSHClient, server: Server, cmd: str, step: str, *, check: bool = True) -> None:
+async def _run(ssh: SSHRunner, server: Server, cmd: str, step: str, *, check: bool = True) -> None:
     try:
         await ssh.run(server, cmd, check=check)
     except SSHError as exc:
@@ -47,7 +47,7 @@ async def _run(ssh: SSHClient, server: Server, cmd: str, step: str, *, check: bo
 
 
 async def uninstall_v2node(
-    ssh: SSHClient,
+    ssh: SSHRunner,
     server: Server,
 ) -> AsyncIterator[UninstallProgress]:
     """逐步卸载。每一步用 yield 暴露进度,失败抛 UninstallError。"""

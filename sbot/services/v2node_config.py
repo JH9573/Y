@@ -17,7 +17,7 @@ from typing import Any
 
 from ..db.models import Server
 from .v2node import IS_ACTIVE_CMD
-from ..core.ssh import SSHClient, SSHError
+from ..core.ssh import SSHError, SSHRunner
 
 
 log = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ def validate_api_key(value: str) -> str:
 
 # ---------- 远程读写 ----------
 
-async def read_config(ssh: SSHClient, server: Server) -> dict[str, Any]:
+async def read_config(ssh: SSHRunner, server: Server) -> dict[str, Any]:
     """读取并解析远程 config.json。"""
     raw = await ssh.read_file(server, CONFIG_PATH)
     try:
@@ -106,24 +106,24 @@ def serialize_config(cfg: dict[str, Any]) -> str:
     return json.dumps(cfg, ensure_ascii=False, indent=4)
 
 
-async def backup_remote_config(ssh: SSHClient, server: Server) -> None:
+async def backup_remote_config(ssh: SSHRunner, server: Server) -> None:
     """在远程把 config.json 复制为 config.json.bak。"""
     # 用 cp -f 确保覆盖;命令固定,无注入面。
     await ssh.run(server, f"cp -f {CONFIG_PATH} {BACKUP_PATH}", check=True)
 
 
-async def restore_remote_backup(ssh: SSHClient, server: Server) -> None:
+async def restore_remote_backup(ssh: SSHRunner, server: Server) -> None:
     """回滚:用远程 .bak 覆盖 config.json,并重启 v2node。"""
     await ssh.run(server, f"cp -f {BACKUP_PATH} {CONFIG_PATH}", check=True)
     await ssh.run(server, "systemctl restart v2node")
 
 
-async def write_config(ssh: SSHClient, server: Server, cfg: dict[str, Any]) -> None:
+async def write_config(ssh: SSHRunner, server: Server, cfg: dict[str, Any]) -> None:
     """序列化并写回远程 config.json。"""
     await ssh.write_file(server, CONFIG_PATH, serialize_config(cfg))
 
 
-async def restart_and_verify(ssh: SSHClient, server: Server) -> tuple[bool, str]:
+async def restart_and_verify(ssh: SSHRunner, server: Server) -> tuple[bool, str]:
     """重启 v2node 并校验运行状态。
 
     返回 (是否健康, 状态文本)。
@@ -148,7 +148,7 @@ def _find_index(nodes: list[dict[str, Any]], api_host: str, node_id: int) -> int
 
 
 async def add_node_to_config(
-    ssh: SSHClient,
+    ssh: SSHRunner,
     server: Server,
     entry: NodeEntry,
 ) -> tuple[bool, str]:
@@ -184,7 +184,7 @@ async def add_node_to_config(
 
 
 async def remove_node_from_config(
-    ssh: SSHClient,
+    ssh: SSHRunner,
     server: Server,
     api_host: str,
     node_id: int,
@@ -216,7 +216,7 @@ async def remove_node_from_config(
     return True, "节点已删除,v2node 重启成功"
 
 
-async def _safe_rollback(ssh: SSHClient, server: Server) -> None:
+async def _safe_rollback(ssh: SSHRunner, server: Server) -> None:
     try:
         await restore_remote_backup(ssh, server)
     except Exception:  # noqa: BLE001
@@ -224,7 +224,7 @@ async def _safe_rollback(ssh: SSHClient, server: Server) -> None:
 
 
 async def read_remote_nodes(
-    ssh: SSHClient,
+    ssh: SSHRunner,
     server: Server,
 ) -> list[NodeEntry]:
     """只读:读取远程 Nodes 数组,转成 NodeEntry 列表。

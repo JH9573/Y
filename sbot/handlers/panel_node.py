@@ -29,14 +29,14 @@ from .common import (
     CB_PANEL_PREFIX,
     get_ctx,
     humanize_age,
+    pager_row,
+    paginate,
+    safe_edit,
     truncate,
 )
 
 
 log = logging.getLogger(__name__)
-
-# 每页的节点数;一个节点占一行 inline 按钮,再多一屏就翻不完了
-NODE_PAGE_SIZE = 20
 
 # user_data 里记住每个面板最近浏览的页码,详情/删除/同步后能回到原页
 PAGE_MEMO_KEY = "panel_node_page"
@@ -123,27 +123,19 @@ async def _render_node_list(
         )
         header_lines.append("")
         header_lines.append("(暂无节点) 点「🔄 同步」从面板拉取或「➕ 添加」新建。")
-        await query.edit_message_text("\n".join(header_lines), reply_markup=kb)
+        await safe_edit(query, "\n".join(header_lines), reply_markup=kb)
         return
 
-    total_pages = -(-len(nodes) // NODE_PAGE_SIZE)
-    if page is None:
-        page = _remembered_page(context, panel_id)
-    page = max(1, min(page, total_pages))
-    _remember_page(context, panel_id, page)
-    start = (page - 1) * NODE_PAGE_SIZE
-    current = nodes[start:start + NODE_PAGE_SIZE]
+    view = paginate(nodes, page if page is not None else _remembered_page(context, panel_id))
+    _remember_page(context, panel_id, view.number)
 
-    if total_pages > 1:
-        header_lines.append(
-            f"第 {page} / {total_pages} 页"
-            f"(第 {start + 1}-{start + len(current)} 个)"
-        )
+    if view.multi:
+        header_lines.append(view.label)
     header_lines.append("")
     header_lines.append("图例: 🟢正常 🟡异常 🔴离线 ⚪未知 / ✅上架 ❌下架 / 🔁中转")
 
     rows: list[list[InlineKeyboardButton]] = []
-    for n in current:
+    for n in view.items:
         health = _health_emoji(n.available_status)
         show_mark = "✅" if n.show else "❌"
         relay = "🔁" if n.parent_id else ""
@@ -155,18 +147,7 @@ async def _render_node_list(
             )]
         )
 
-    # 分页按钮
-    pager: list[InlineKeyboardButton] = []
-    if page > 1:
-        pager.append(InlineKeyboardButton(
-            "⬅ 上一页",
-            callback_data=f"{CB_PANEL_NODES}{panel_id}:{page - 1}",
-        ))
-    if page < total_pages:
-        pager.append(InlineKeyboardButton(
-            "下一页 ➡",
-            callback_data=f"{CB_PANEL_NODES}{panel_id}:{page + 1}",
-        ))
+    pager = pager_row(f"{CB_PANEL_NODES}{panel_id}:", view)
     if pager:
         rows.append(pager)
 
@@ -186,7 +167,8 @@ async def _render_node_list(
             ),
         ]
     )
-    await query.edit_message_text(
+    await safe_edit(
+        query,
         truncate("\n".join(header_lines)),
         reply_markup=InlineKeyboardMarkup(rows),
     )
@@ -270,8 +252,8 @@ async def _render_node_detail(
             callback_data=f"{CB_PANEL_NODES}{panel_id}",
         ),
     ])
-    await query.edit_message_text(
-        truncate(text), reply_markup=InlineKeyboardMarkup(rows)
+    await safe_edit(
+        query, truncate(text), reply_markup=InlineKeyboardMarkup(rows)
     )
 
 

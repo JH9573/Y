@@ -28,16 +28,14 @@ from .common import (
     CB_NODE_ADD_PANEL,
     CB_NODE_MENU,
     get_ctx,
+    safe_edit,
+    split_page_arg,
 )
 from .firewall import port_check_block
+from .pickers import render_node_picker, render_panel_picker
 
 
 log = logging.getLogger(__name__)
-
-
-# 列表上限,避免按钮过多
-PANEL_LIMIT = 30
-NODE_LIST_LIMIT = 50
 
 
 # ---------- step 1: 选面板 ----------
@@ -48,7 +46,8 @@ async def cb_addnode_start(
     """节点管理菜单点了「➕ 添加节点」,展示面板列表。"""
     query = update.callback_query
     await query.answer()
-    server_id = int(query.data.split(":", 1)[1])
+    (server_id_s,), page = split_page_arg(query.data.split(":", 1)[1], 1)
+    server_id = int(server_id_s)
 
     async with crud.session() as s:
         server = await crud.get_server(s, server_id)
@@ -57,53 +56,23 @@ async def cb_addnode_start(
             return
         panels = await crud.list_panels(s)
 
-    back_kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(
-            "⬅ 返回节点菜单",
-            callback_data=f"{CB_NODE_MENU}{server_id}",
-        )]]
+    back = InlineKeyboardButton(
+        "⬅ 返回节点菜单", callback_data=f"{CB_NODE_MENU}{server_id}"
     )
-    if not panels:
-        await query.edit_message_text(
-            "尚未登记任何面板。请先使用 /addpanel 添加。",
-            reply_markup=back_kb,
-        )
-        return
-
-    rows: list[list[InlineKeyboardButton]] = []
-    skipped: list[str] = []
-    for p in panels[:PANEL_LIMIT]:
-        if not p.api_host or not p.api_key:
-            skipped.append(p.name)
-            continue
-        rows.append([InlineKeyboardButton(
-            f"{p.name} ({p.api_host})",
-            callback_data=f"{CB_NODE_ADD_PANEL}{server_id}:{p.id}",
-        )])
-    rows.append([InlineKeyboardButton(
-        "⬅ 返回",
-        callback_data=f"{CB_NODE_MENU}{server_id}",
-    )])
-
-    lines = [
-        f"为服务器「{server.name}」添加 v2node 节点。",
-        "",
-        "请选择面板:",
-    ]
-    if skipped:
-        lines.append("")
-        lines.append("以下面板因缺通信凭据(api_host / api_key)被跳过:")
-        for n in skipped:
-            lines.append(f"  • {n}")
-        lines.append("可去 /panel 对应面板点「🔄 同步通信凭据」补上。")
-    if not any(r for r in rows[:-1]):
-        # 全部都被跳过
-        await query.edit_message_text(
-            "\n".join(lines), reply_markup=back_kb
-        )
-        return
-    await query.edit_message_text(
-        "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows)
+    await render_panel_picker(
+        query,
+        panels=panels,
+        page=page,
+        intro=[
+            f"为服务器「{server.name}」添加 v2node 节点。",
+            "",
+            "请选择面板:",
+        ],
+        pick_cb=lambda p: f"{CB_NODE_ADD_PANEL}{server_id}:{p.id}",
+        page_cb_prefix=f"{CB_NODE_ADD}{server_id}:",
+        back=back,
+        empty_text="尚未登记任何面板。请先使用 /addpanel 添加。",
+        missing_creds_hint="可去 /panel 对应面板点「🔄 同步通信凭据」补上。",
     )
 
 
@@ -114,8 +83,9 @@ async def cb_addnode_pick_panel(
 ) -> None:
     query = update.callback_query
     await query.answer()
-    _, payload = query.data.split(":", 1)
-    server_id_s, panel_id_s = payload.split(":", 1)
+    (server_id_s, panel_id_s), page = split_page_arg(
+        query.data.split(":", 1)[1], 2
+    )
     server_id = int(server_id_s)
     panel_id = int(panel_id_s)
 
@@ -127,45 +97,24 @@ async def cb_addnode_pick_panel(
             return
         nodes = await crud.list_panel_nodes(s, panel_id)
 
-    back_kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(
-            "⬅ 重选面板",
-            callback_data=f"{CB_NODE_ADD}{server_id}",
-        )]]
+    back = InlineKeyboardButton(
+        "⬅ 重选面板", callback_data=f"{CB_NODE_ADD}{server_id}"
     )
-    if not nodes:
-        await query.edit_message_text(
+    await render_node_picker(
+        query,
+        nodes=nodes,
+        page=page,
+        intro=[
+            f"面板「{panel.name}」下的 v2node 节点(共 {len(nodes)}),"
+            f"选一个加到服务器「{server.name}」:",
+        ],
+        pick_cb=lambda n: f"{CB_NODE_ADD_NODE}{server_id}:{panel_id}:{n.node_id}",
+        page_cb_prefix=f"{CB_NODE_ADD_PANEL}{server_id}:{panel_id}:",
+        back=back,
+        empty_text=(
             f"面板「{panel.name}」本地未缓存 v2node 节点。\n"
-            "请先 /panel 进入该面板,点「📋 节点列表」→「🔄 同步」。",
-            reply_markup=back_kb,
-        )
-        return
-
-    rows: list[list[InlineKeyboardButton]] = []
-    for n in nodes[:NODE_LIST_LIMIT]:
-        relay = "🔁" if n.parent_id else ""
-        show = "✅" if n.show else "❌"
-        label = f"{show}{relay} #{n.node_id} {n.name}"
-        rows.append([InlineKeyboardButton(
-            label,
-            callback_data=(
-                f"{CB_NODE_ADD_NODE}{server_id}:{panel_id}:{n.node_id}"
-            ),
-        )])
-    if len(nodes) > NODE_LIST_LIMIT:
-        rows.append([InlineKeyboardButton(
-            f"(共 {len(nodes)},仅显示前 {NODE_LIST_LIMIT})",
-            callback_data="noop",
-        )])
-    rows.append([InlineKeyboardButton(
-        "⬅ 重选面板",
-        callback_data=f"{CB_NODE_ADD}{server_id}",
-    )])
-
-    await query.edit_message_text(
-        f"面板「{panel.name}」下的 v2node 节点(共 {len(nodes)}),"
-        f"选一个加到服务器「{server.name}」:",
-        reply_markup=InlineKeyboardMarkup(rows),
+            "请先 /panel 进入该面板,点「📋 节点列表」→「🔄 同步」。"
+        ),
     )
 
 
@@ -276,8 +225,13 @@ async def cb_addnode_do(
         api_key=api_key_plain,
         timeout=15,
     )
+    # 读配置 → 备份 → 写回 → 重启 → 校验,加上之后的端口体检,全在一条连接上跑
+    fw_block: tuple[str, list[InlineKeyboardButton]] | None = None
     try:
-        ok, msg = await add_node_to_config(ctx.ssh, server, entry)
+        async with ctx.ssh.connection(server) as conn:
+            ok, msg = await add_node_to_config(conn, server, entry)
+            if ok:
+                fw_block = await port_check_block(conn, server)
     except (V2NodeConfigError, SSHError) as exc:
         ok, msg = False, str(exc)
 
@@ -307,27 +261,27 @@ async def cb_addnode_do(
     prefix = "✅" if ok else "❌"
     body = f"{prefix} {msg}"
     rows: list[list[InlineKeyboardButton]] = []
-    if ok:
-        fw_text, fw_buttons = await port_check_block(ctx.ssh, server)
+    if ok and fw_block is not None:
+        fw_text, fw_buttons = fw_block
         body = f"{body}\n\n{fw_text}"
         if fw_buttons:
             rows.append(fw_buttons)
     rows.append([InlineKeyboardButton(
         "⬅ 返回节点列表", callback_data=f"{CB_NODE_MENU}{server_id}",
     )])
-    await query.edit_message_text(body, reply_markup=InlineKeyboardMarkup(rows))
+    await safe_edit(query, body, reply_markup=InlineKeyboardMarkup(rows))
 
 
 def register(application, ctx) -> None:
     application.add_handler(
         CallbackQueryHandler(
-            cb_addnode_start, pattern=f"^{CB_NODE_ADD}\\d+$"
+            cb_addnode_start, pattern=f"^{CB_NODE_ADD}\\d+(:\\d+)?$"
         )
     )
     application.add_handler(
         CallbackQueryHandler(
             cb_addnode_pick_panel,
-            pattern=f"^{CB_NODE_ADD_PANEL}\\d+:\\d+$",
+            pattern=f"^{CB_NODE_ADD_PANEL}\\d+:\\d+(:\\d+)?$",
         )
     )
     application.add_handler(
