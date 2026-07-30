@@ -47,6 +47,7 @@ from .handlers import (
     panel,
     panel_node,
     release,
+    release_sync,
     remote_config,
     server,
     uninstall,
@@ -177,6 +178,8 @@ def build_application() -> Application:
     add_remote_file.register(application, ctx)
     edit_remote_file.register(application, ctx)
     remote_config.register(application, ctx)
+    # 分发结果 → 远程配置的同步(依赖上面两组已注册的 callback)
+    release_sync.register(application, ctx)
     logs.register(application, ctx)
     update_bot.register(application, ctx)
     # menu 必须放在所有 ConversationHandler 之后,确保对话 entry 先匹配
