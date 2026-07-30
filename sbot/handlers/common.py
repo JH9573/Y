@@ -1,6 +1,8 @@
 """handler 共享的工具与上下文容器。"""
 from __future__ import annotations
 
+import html as html_lib
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -71,6 +73,8 @@ CB_PANEL_NODE_SYNC = "pnlsync:"  # pnlsync:<panel_id> -> 从面板同步节点
 CB_PANEL_NODE_ADD = "pnladd:"  # pnladd:<panel_id> -> 添加 shadowsocks 节点
 CB_PANEL_NODE_EDIT = "pnledit:"  # pnledit:<panel_id>:<node_id> -> 编辑 shadowsocks 节点
 CB_PANEL_NODE_COPY = "pnlcopy:"  # pnlcopy:<panel_id>:<node_id> -> 复制节点
+CB_PANEL_NOTICES = "pnnt:"  # pnnt:<panel_id>:<page> -> 公告列表
+CB_PANEL_NOTICE = "pnntd:"  # pnntd:<panel_id>:<page>:<notice_id> -> 公告详情
 CB_EDIT_PANEL = "epnl:"  # epnl:<panel_id> -> 编辑面板信息
 CB_SYNC_PANEL_CREDS = "psync:"  # psync:<panel_id> -> 重拉 api_host/api_key
 CB_NODE_ADD_PANEL = "naddp:"  # naddp:<server_id>:<panel_id> -> 添加节点二级:选面板后
@@ -170,6 +174,43 @@ def human_size(num: int) -> str:
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
     return f"{size:.1f} TB"
+
+
+# ---------- 富文本 <-> 纯文本 ----------
+# 面板公告正文是富文本 HTML,而 bot 全程不用 parse_mode 发消息,
+# 所以展示前必须把标签剥干净,录入时再把纯文本换行还原成 <br/>。
+
+_BR_PATTERN = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_BLOCK_END_PATTERN = re.compile(r"</(p|div|li|h[1-6]|tr|blockquote)>", re.IGNORECASE)
+_TAG_PATTERN = re.compile(r"<[^>]+>")
+_BLANK_LINES_PATTERN = re.compile(r"\n{3,}")
+# 输入里出现这些标签就认为用户在直接贴 HTML,原样透传
+_HTML_HINT_PATTERN = re.compile(
+    r"<(p|br|div|img|a|h[1-6]|ul|ol|li|strong|em|b|i|span)\b", re.IGNORECASE
+)
+
+
+def html_to_text(raw: str) -> str:
+    """把公告 HTML 压成可读纯文本(块级标签转换行,实体还原)。"""
+    if not raw:
+        return ""
+    text = _BR_PATTERN.sub("\n", raw)
+    text = _BLOCK_END_PATTERN.sub("\n", text)
+    text = _TAG_PATTERN.sub("", text)
+    text = html_lib.unescape(text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return _BLANK_LINES_PATTERN.sub("\n\n", text).strip()
+
+
+def text_to_html(text: str) -> str:
+    """把用户输入的纯文本转成公告 HTML,换行变 <br/>。
+
+    输入本身已经带标签时视为用户手写 HTML,原样透传。
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if _HTML_HINT_PATTERN.search(text):
+        return text
+    return html_lib.escape(text, quote=False).replace("\n", "<br/>")
 
 
 def humanize_age(when: datetime | None) -> str:

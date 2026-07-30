@@ -46,6 +46,7 @@ from .handlers import (
     oss_config,
     panel,
     panel_node,
+    panel_notice,
     release,
     release_sync,
     remote_config,
@@ -162,6 +163,7 @@ def build_application() -> Application:
     node.register(application, ctx)
     panel.register(application, ctx)
     panel_node.register(application, ctx)
+    panel_notice.register(application, ctx)
     edit_panel.register(application, ctx)
     edit_panel_node.register(application, ctx)
     # DNS 管理(顺序:add/edit conversation 先注册,普通 callback 后)

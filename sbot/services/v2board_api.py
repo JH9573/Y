@@ -96,6 +96,13 @@ def v2node_to_db_row(node: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ---------- 公告 ----------
+
+# get_notice 按 id 翻页查找时的步长与页数上限(最多扫 200 条)
+NOTICE_SCAN_PAGE_SIZE = 50
+NOTICE_SCAN_MAX_PAGES = 4
+
+
 # ---------- 客户端 ----------
 
 class V2BoardClient:
@@ -324,6 +331,58 @@ class V2BoardClient:
         await self._request_admin(
             panel, "POST", "server/v2node/save", json_body=body
         )
+
+    # ---------- 公告 ----------
+
+    async def get_notices(
+        self,
+        panel: Panel,
+        *,
+        current: int = 1,
+        page_size: int = 10,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """拉公告列表,返回 (当页公告, 总条数)。
+
+        新版 v2board 的 notice/fetch 认 current / page_size 并回 total;
+        老版本忽略分页参数、一次性返回全量数组。两种都兼容:响应里没有
+        total 就按本地切片,total 取数组长度。
+        """
+        payload = await self._request_admin(
+            panel,
+            "GET",
+            "notice/fetch",
+            params={"current": current, "page_size": page_size},
+        )
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise V2BoardAPIError("notice/fetch 响应缺少 data 数组")
+        items = [n for n in data if isinstance(n, dict)]
+
+        total = _opt_int(payload.get("total"))
+        if total is not None:
+            return items, total
+        start = (current - 1) * page_size
+        return items[start : start + page_size], len(items)
+
+    async def get_notice(
+        self, panel: Panel, notice_id: int
+    ) -> dict[str, Any] | None:
+        """按 id 取单条公告。面板没有「取单条」的接口,只能翻页找。
+
+        公告量级通常在个位数,首页就能命中;拿到 total 后即可判断是否还有下一页。
+        """
+        page = 1
+        while page <= NOTICE_SCAN_MAX_PAGES:
+            items, total = await self.get_notices(
+                panel, current=page, page_size=NOTICE_SCAN_PAGE_SIZE
+            )
+            for item in items:
+                if _opt_int(item.get("id")) == notice_id:
+                    return item
+            if not items or page * NOTICE_SCAN_PAGE_SIZE >= total:
+                return None
+            page += 1
+        return None
 
     async def fetch_config(self, panel: Panel) -> dict[str, Any]:
         """拉取面板系统配置(用于读取 server_api_url / server_token 等)。"""
