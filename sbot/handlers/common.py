@@ -114,6 +114,12 @@ CB_REL_TOGGLE = "rtog:"       # rtog:<asset_index> -> 勾选/取消勾选某个�
 CB_REL_ALL = "rall"           # 全选当前版本的文件
 CB_REL_NONE = "rnone"         # 清空当前版本的勾选
 CB_REL_GO = "rgo:"            # rgo:<index> -> 确认后下载并上传已勾选的文件
+# 分发完成后把版本信息同步进远程配置 JSON。发布结果存在 user_data 里,
+# callback_data 带上它的流水号,防止翻聊天记录点到旧版本的按钮。
+CB_REL_SYNC = "rsync:"        # rsync:<serial> -> 选择要同步的远程配置文件
+CB_RSYNC_FILE = "rsyf:"       # rsyf:<serial>:<file_id> -> 预览将写入的字段
+CB_RSYNC_GO = "rsyg:"         # rsyg:<serial>:<file_id> -> 确认后写回 COS
+CB_RSYNC_NO = "rsyn"          # 预览页放弃同步
 # 远程配置(腾讯云 COS 上的 JSON 文件)
 CB_MENU_RCFG_LIST = "mrcls"   # 进入远程配置文件列表
 CB_MENU_RCFG_ADD = "mrcad"    # 进入添加远程配置文件对话
