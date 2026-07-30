@@ -384,6 +384,22 @@ class V2BoardClient:
             page += 1
         return None
 
+    async def toggle_notice_show(self, panel: Panel, notice_id: int) -> None:
+        """翻转公告的发布状态。
+
+        v2board 的 notice/show 不接受目标值,只按当前值取反,所以调用方
+        不能假定结果,应重新拉一次公告确认。
+        """
+        await self._request_admin(
+            panel, "POST", "notice/show", json_body={"id": notice_id}
+        )
+
+    async def drop_notice(self, panel: Panel, notice_id: int) -> None:
+        """删除公告。"""
+        await self._request_admin(
+            panel, "POST", "notice/drop", json_body={"id": notice_id}
+        )
+
     async def fetch_config(self, panel: Panel) -> dict[str, Any]:
         """拉取面板系统配置(用于读取 server_api_url / server_token 等)。"""
         payload = await self._request_admin(panel, "GET", "config/fetch")

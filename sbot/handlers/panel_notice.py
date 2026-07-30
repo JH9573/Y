@@ -17,6 +17,9 @@ from ..db.models import Panel
 from ..services.v2board_api import V2BoardAPIError
 from .common import (
     CB_PANEL_NOTICE,
+    CB_PANEL_NOTICE_DEL,
+    CB_PANEL_NOTICE_DEL_OK,
+    CB_PANEL_NOTICE_SHOW,
     CB_PANEL_NOTICES,
     CB_PANEL_PREFIX,
     get_ctx,
@@ -245,11 +248,22 @@ async def _render_notice_detail(
     if banner:
         text = f"{banner}\n\n{text}"
 
-    rows: list[list[InlineKeyboardButton]] = []
-    rows.append([InlineKeyboardButton(
-        "⬅ 返回列表",
-        callback_data=f"{CB_PANEL_NOTICES}{panel_id}:{page}",
-    )])
+    suffix = f"{panel_id}:{page}:{notice_id}"
+    show_label = "🔻 取消发布" if _is_shown(item) else "🔺 发布"
+    rows = [
+        [
+            InlineKeyboardButton(
+                show_label, callback_data=f"{CB_PANEL_NOTICE_SHOW}{suffix}"
+            ),
+            InlineKeyboardButton(
+                "🗑 删除", callback_data=f"{CB_PANEL_NOTICE_DEL}{suffix}"
+            ),
+        ],
+        [InlineKeyboardButton(
+            "⬅ 返回列表",
+            callback_data=f"{CB_PANEL_NOTICES}{panel_id}:{page}",
+        )],
+    ]
     await query.edit_message_text(
         truncate(text), reply_markup=InlineKeyboardMarkup(rows)
     )
@@ -272,6 +286,116 @@ def _format_notice(item: dict[str, Any], notice_id: int) -> str:
     return "\n".join(lines)
 
 
+# ---------- 发布 / 取消发布 ----------
+
+async def cb_notice_show_toggle(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    _, payload = query.data.split(":", 1)
+    panel_id_s, page_s, notice_id_s = payload.split(":", 2)
+    panel_id, page, notice_id = int(panel_id_s), int(page_s), int(notice_id_s)
+
+    panel = await _load_panel(update, panel_id)
+    if panel is None:
+        return
+    ctx = get_ctx(context)
+
+    try:
+        await ctx.v2board.toggle_notice_show(panel, notice_id)
+        ok, msg = True, "已切换发布状态"
+    except V2BoardAPIError as exc:
+        ok, msg = False, str(exc)
+
+    await _log(update, "panel.notice.show", ok, panel_id, notice_id, msg)
+    # notice/show 是取反语义,不能本地推断结果,详情页会重新拉取真实状态
+    await _render_notice_detail(
+        update, context, panel_id, page, notice_id,
+        banner=f"{'✅' if ok else '❌'} {msg}",
+    )
+
+
+# ---------- 删除 ----------
+
+async def cb_notice_drop_confirm(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    _, payload = query.data.split(":", 1)
+    panel_id_s, page_s, notice_id_s = payload.split(":", 2)
+    panel_id, page, notice_id = int(panel_id_s), int(page_s), int(notice_id_s)
+
+    panel = await _load_panel(update, panel_id)
+    if panel is None:
+        return
+
+    suffix = f"{panel_id}:{page}:{notice_id}"
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "确认删除", callback_data=f"{CB_PANEL_NOTICE_DEL_OK}{suffix}"
+        ),
+        InlineKeyboardButton(
+            "取消", callback_data=f"{CB_PANEL_NOTICE}{suffix}"
+        ),
+    ]])
+    await query.edit_message_text(
+        f"⚠️ 确认从面板「{panel.name}」删除公告 #{notice_id}?\n该操作不可撤销。",
+        reply_markup=kb,
+    )
+
+
+async def cb_notice_drop_do(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    _, payload = query.data.split(":", 1)
+    panel_id_s, page_s, notice_id_s = payload.split(":", 2)
+    panel_id, page, notice_id = int(panel_id_s), int(page_s), int(notice_id_s)
+
+    panel = await _load_panel(update, panel_id)
+    if panel is None:
+        return
+    ctx = get_ctx(context)
+
+    try:
+        await ctx.v2board.drop_notice(panel, notice_id)
+        ok, msg = True, f"已删除公告 #{notice_id}"
+    except V2BoardAPIError as exc:
+        ok, msg = False, str(exc)
+
+    await _log(update, "panel.notice.drop", ok, panel_id, notice_id, msg)
+    banner = f"{'✅' if ok else '❌'} {msg}"
+    if ok:
+        await _render_notice_list(update, context, panel_id, page, banner=banner)
+    else:
+        await _render_notice_detail(
+            update, context, panel_id, page, notice_id, banner=banner
+        )
+
+
+async def _log(
+    update: Update,
+    action: str,
+    ok: bool,
+    panel_id: int,
+    notice_id: int | None,
+    msg: str,
+) -> None:
+    async with crud.session() as s:
+        await crud.add_log(
+            s,
+            user_id=update.effective_user.id,
+            server_id=None,
+            action=action,
+            result="success" if ok else "failed",
+            detail=f"panel_id={panel_id}, notice_id={notice_id}: {msg}",
+        )
+        await s.commit()
+
+
 def register(application, ctx) -> None:
     application.add_handler(
         CallbackQueryHandler(
@@ -281,5 +405,23 @@ def register(application, ctx) -> None:
     application.add_handler(
         CallbackQueryHandler(
             cb_notice_detail, pattern=f"^{CB_PANEL_NOTICE}\\d+:\\d+:\\d+$"
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            cb_notice_show_toggle,
+            pattern=f"^{CB_PANEL_NOTICE_SHOW}\\d+:\\d+:\\d+$",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            cb_notice_drop_confirm,
+            pattern=f"^{CB_PANEL_NOTICE_DEL}\\d+:\\d+:\\d+$",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            cb_notice_drop_do,
+            pattern=f"^{CB_PANEL_NOTICE_DEL_OK}\\d+:\\d+:\\d+$",
         )
     )
