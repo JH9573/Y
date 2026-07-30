@@ -17,8 +17,10 @@ from ..db.models import Panel
 from ..services.v2board_api import V2BoardAPIError
 from .common import (
     CB_PANEL_NOTICE,
+    CB_PANEL_NOTICE_ADD,
     CB_PANEL_NOTICE_DEL,
     CB_PANEL_NOTICE_DEL_OK,
+    CB_PANEL_NOTICE_EDIT,
     CB_PANEL_NOTICE_SHOW,
     CB_PANEL_NOTICES,
     CB_PANEL_PREFIX,
@@ -155,7 +157,7 @@ async def _render_notice_list(
     rows: list[list[InlineKeyboardButton]] = []
     if not items:
         lines.append("")
-        lines.append("(暂无公告)")
+        lines.append("(暂无公告)点「➕ 发布公告」新建一条。")
     else:
         lines.append("")
         lines.append("图例: ✅已发布 ❌未发布")
@@ -184,6 +186,9 @@ async def _render_notice_list(
     if pager:
         rows.append(pager)
 
+    rows.append([InlineKeyboardButton(
+        "➕ 发布公告", callback_data=f"{CB_PANEL_NOTICE_ADD}{panel_id}"
+    )])
     rows.append([
         InlineKeyboardButton(
             "🔄 刷新", callback_data=f"{CB_PANEL_NOTICES}{panel_id}:{page}"
@@ -259,10 +264,15 @@ async def _render_notice_detail(
                 "🗑 删除", callback_data=f"{CB_PANEL_NOTICE_DEL}{suffix}"
             ),
         ],
-        [InlineKeyboardButton(
-            "⬅ 返回列表",
-            callback_data=f"{CB_PANEL_NOTICES}{panel_id}:{page}",
-        )],
+        [
+            InlineKeyboardButton(
+                "✏️ 编辑", callback_data=f"{CB_PANEL_NOTICE_EDIT}{suffix}"
+            ),
+            InlineKeyboardButton(
+                "⬅ 返回列表",
+                callback_data=f"{CB_PANEL_NOTICES}{panel_id}:{page}",
+            ),
+        ],
     ]
     await query.edit_message_text(
         truncate(text), reply_markup=InlineKeyboardMarkup(rows)

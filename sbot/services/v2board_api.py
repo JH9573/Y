@@ -49,6 +49,14 @@ def validate_secure_path(value: str) -> str:
     return value
 
 
+def validate_img_url(value: str) -> str:
+    """公告配图地址。v2board 侧规则是 nullable|url,空值由调用方决定是否发送。"""
+    value = value.strip()
+    if not _URL_PATTERN.match(value):
+        raise V2BoardAPIError("图片地址必须是 http:// 或 https:// 开头的 URL")
+    return value
+
+
 def validate_email(value: str) -> str:
     value = value.strip()
     if not _EMAIL_PATTERN.match(value):
@@ -383,6 +391,25 @@ class V2BoardClient:
                 return None
             page += 1
         return None
+
+    async def save_notice(
+        self,
+        panel: Panel,
+        payload: dict[str, Any],
+        *,
+        notice_id: int | None = None,
+    ) -> None:
+        """创建或更新公告。传 notice_id 视为更新,省略则新建。
+
+        v2board 的 notice/save 只接受 title / content / img_url / tags,
+        不含 show,所以编辑不会动公告的发布状态。
+        """
+        body = dict(payload)
+        if notice_id is not None:
+            body["id"] = notice_id
+        await self._request_admin(
+            panel, "POST", "notice/save", json_body=body
+        )
 
     async def toggle_notice_show(self, panel: Panel, notice_id: int) -> None:
         """翻转公告的发布状态。

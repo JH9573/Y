@@ -36,6 +36,7 @@ from .handlers import (
     edit_dns_account,
     edit_panel,
     edit_panel_node,
+    edit_panel_notice,
     edit_server,
     firewall,
     install,
@@ -163,6 +164,8 @@ def build_application() -> Application:
     node.register(application, ctx)
     panel.register(application, ctx)
     panel_node.register(application, ctx)
+    # 公告:发布/编辑对话先注册,普通 callback 后
+    edit_panel_notice.register(application, ctx)
     panel_notice.register(application, ctx)
     edit_panel.register(application, ctx)
     edit_panel_node.register(application, ctx)
