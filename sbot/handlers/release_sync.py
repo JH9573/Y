@@ -5,7 +5,6 @@
 
 写入的字段(其余字段如 api 一概不动):
 - tag: Release 的 tag
-- download_url: 本版本目录地址 <prefix>/<tag>/
 - download_urls: 每个平台一个链接(macOS 给 arm64 的 dmg)
 - download_assets: 各平台各架构的 url / sha256 / size
 
@@ -75,15 +74,17 @@ def _short(url: str, dir_url: str) -> str:
     return url[len(dir_url):] if url.startswith(dir_url) else url
 
 
-def _preview_text(path: str, before: dict, patch: dict) -> str:
-    """按 patch 里最终的字段顺序渲染,预览即所写。"""
-    dir_url = patch["download_url"]
+def _preview_text(path: str, before: dict, patch: dict, dir_url: str) -> str:
+    """按 patch 里最终的字段顺序渲染,预览即所写。
+
+    dir_url 只用来把长链接缩成文件名显示,本身不写进配置。
+    """
     old_tag = before.get("tag")
     lines = [
         f"🔗 即将写入「{path}」",
         "",
         f"tag: {old_tag or '(无)'} → {patch['tag']}",
-        f"download_url: {dir_url}",
+        f"本版本目录: {dir_url}",
         "",
         "download_urls(相对上面的目录):",
     ]
@@ -107,7 +108,7 @@ def _preview_text(path: str, before: dict, patch: dict) -> str:
     lines.append("")
     if kept:
         lines.append("本次未上传、条目原样保留的平台:" + "、".join(kept))
-    lines.append("其余字段(api 等)保持不动。")
+    lines.append("其余字段(api、download_url 等)保持不动。")
     return truncate("\n".join(lines))
 
 
@@ -220,7 +221,7 @@ async def _show_preview(
         return
 
     patch = release_manifest.build_patch(
-        tag=data["tag"], dir_url=data["dir_url"], assets=data["assets"],
+        tag=data["tag"], assets=data["assets"],
     )
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton(
@@ -229,7 +230,7 @@ async def _show_preview(
         InlineKeyboardButton("取消", callback_data=CB_RSYNC_NO),
     ]])
     await query.edit_message_text(
-        _preview_text(file.path, before, patch),
+        _preview_text(file.path, before, patch, data["dir_url"]),
         reply_markup=kb,
         disable_web_page_preview=True,
     )
@@ -259,7 +260,7 @@ async def cb_go(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     ctx = get_ctx(context)
     patch = release_manifest.build_patch(
-        tag=data["tag"], dir_url=data["dir_url"], assets=data["assets"],
+        tag=data["tag"], assets=data["assets"],
     )
     try:
         cos = await load_cos(ctx)

@@ -4,8 +4,8 @@
 配置(COS 上的 config.json)知道去哪下载、下完校验什么。这里只做纯计算:
 
 1. 按文件名识别平台与架构(UUCNet-3.1.5-macos-arm64.dmg → macos/arm64);
-2. 把识别结果拼成 config.json 的补丁(tag / download_url / download_urls /
-   download_assets),再合并进原文件,原有的其它字段(如 api)保持不动。
+2. 把识别结果拼成 config.json 的补丁(tag / download_urls / download_assets),
+   再合并进原文件,原有的其它字段(如 api、download_url)保持不动。
 
 与客户端约定:
 
@@ -131,7 +131,7 @@ def _sorted_assets(assets: Sequence[ManifestAsset]) -> list[ManifestAsset]:
 
 
 def build_patch(
-    *, tag: str, dir_url: str, assets: Sequence[ManifestAsset],
+    *, tag: str, assets: Sequence[ManifestAsset],
 ) -> dict[str, Any]:
     """生成待写入 config.json 的字段。同一槽位重复时后者覆盖前者。"""
     ordered = _sorted_assets(assets)
@@ -155,7 +155,6 @@ def build_patch(
 
     return {
         "tag": tag,
-        "download_url": dir_url,
         "download_urls": download_urls,
         "download_assets": download_assets,
     }
@@ -164,13 +163,12 @@ def build_patch(
 def apply_patch(data: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     """把补丁合并进原配置,返回新对象(不改原对象)。
 
-    tag / download_url 直接覆盖;download_urls 按平台逐键覆盖;
-    download_assets 按平台整体替换(同平台的旧架构条目不保留,
-    避免新旧版本混在一个平台下),其余字段一概不动。
+    tag 直接覆盖;download_urls 按平台逐键覆盖;download_assets 按平台整体
+    替换(同平台的旧架构条目不保留,避免新旧版本混在一个平台下)。
+    其余字段一概不动,包括 download_url。
     """
     out = copy.deepcopy(data)
     out["tag"] = patch["tag"]
-    out["download_url"] = patch["download_url"]
 
     urls = out.get("download_urls")
     if not isinstance(urls, dict):
