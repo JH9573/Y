@@ -35,7 +35,6 @@ from .common import (
 )
 from .cos_config import load_cos
 
-
 log = logging.getLogger(__name__)
 
 

@@ -46,7 +46,6 @@ from .common import (
 )
 from .oss_config import load_oss
 
-
 log = logging.getLogger(__name__)
 
 # Release 列表缓存键(callback_data 放不下 tag,存 user_data 用索引引用)

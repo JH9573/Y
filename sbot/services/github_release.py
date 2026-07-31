@@ -21,7 +21,6 @@ import httpx
 from ..core.crypto import Crypto
 from ..db.models import ReleaseSource
 
-
 log = logging.getLogger(__name__)
 
 

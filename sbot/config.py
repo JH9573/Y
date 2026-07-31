@@ -10,7 +10,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-
 ROOT_DIR = Path(__file__).resolve().parent
 BACKUPS_DIR = ROOT_DIR / "backups"
 
@@ -23,6 +22,8 @@ class Config:
     db_path: str
     ssh_timeout: int
     log_level: str
+    # 同时处理的 update 数。>1 时长任务(安装 / 发布)不再阻塞其它交互
+    max_concurrent_updates: int
     # 阿里云 OSS(安装包分发用,可选;不配则该功能提示未启用)
     oss_region: str | None
     oss_endpoint: str | None
@@ -87,6 +88,7 @@ def load_config() -> Config:
         db_path=os.getenv("DB_PATH", "./sbot.db").strip() or "./sbot.db",
         ssh_timeout=int(os.getenv("SSH_TIMEOUT", "15")),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
+        max_concurrent_updates=max(1, int(os.getenv("MAX_CONCURRENT_UPDATES", "4"))),
         oss_region=_optional("OSS_REGION"),
         oss_endpoint=_optional("OSS_ENDPOINT"),
         oss_bucket=_optional("OSS_BUCKET"),

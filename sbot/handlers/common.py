@@ -3,15 +3,18 @@ from __future__ import annotations
 
 import html as html_lib
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from telegram import KeyboardButton, ReplyKeyboardMarkup
+from telegram import InlineKeyboardButton, KeyboardButton, ReplyKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import filters
 
 from ..config import Config
 from ..core.crypto import Crypto
 from ..core.ssh import SSHClient
+from ..core.timeutil import utcnow
 from ..services.cloudflare_api import CloudflareClient
 from ..services.github_release import GitHubReleaseClient
 from ..services.v2board_api import V2BoardClient
@@ -64,7 +67,7 @@ CB_PANEL_PREFIX = "pnl:"  # pnl:<id> -> 进入面板菜单
 CB_DEL_PANEL = "delpnl:"  # delpnl:<id>
 CB_DEL_PANEL_OK = "delpnlok:"  # delpnlok:<id>
 CB_BACK_PANELS = "back:panels"
-CB_PANEL_NODES = "pnln:"  # pnln:<panel_id> -> v2node 列表
+CB_PANEL_NODES = "pnln:"  # pnln:<panel_id>[:<page>] -> v2node 列表(省略页码=上次浏览的页)
 CB_PANEL_NODE = "pnldd:"  # pnldd:<panel_id>:<node_id> -> 节点详情
 CB_PANEL_NODE_SHOW = "pnlsh:"  # pnlsh:<panel_id>:<node_id>:<0|1> -> 切换上下架
 CB_PANEL_NODE_DROP = "pnldrop:"  # pnldrop:<panel_id>:<node_id> -> 删除二次确认
@@ -161,7 +164,141 @@ CB_UPDATE_PICK = "updpick"    # 展示可切换的远程分支列表
 CB_UPDATE_BRANCH = "updb:"    # updb:<index> -> 选中某个分支(索引指向 user_data 缓存)
 CB_UPDATE_SWITCH = "updsw:"   # updsw:<index> -> 二次确认后切换到该分支并重启
 
+CB_LOGS = "logs:"  # logs:<page>:<0|1 只看失败> -> 操作日志分页
+
 CB_NOOP = "noop"
+
+
+# ---------- 分页 ----------
+
+# 一个条目占一行 inline 按钮,一页 20 条在手机上一屏多一点,再多就难翻了
+PAGE_SIZE = 20
+
+
+@dataclass(frozen=True)
+class Page:
+    """一页数据 + 渲染分页控件所需的全部信息。"""
+
+    items: list
+    number: int       # 当前页码,1 起
+    total_pages: int
+    total: int        # 全部条目数
+    start: int        # 当前页首条在整表中的下标,0 起
+
+    @property
+    def multi(self) -> bool:
+        return self.total_pages > 1
+
+    @property
+    def label(self) -> str:
+        """「第 2 / 7 页(第 21-40 个)」,单页时为空串。"""
+        if not self.multi:
+            return ""
+        return (
+            f"第 {self.number} / {self.total_pages} 页"
+            f"(第 {self.start + 1}-{self.start + len(self.items)} 个)"
+        )
+
+
+def paginate(items: Sequence, page: int | None, size: int = PAGE_SIZE) -> Page:
+    """按页切分。page=None 视为第 1 页;越界一律夹回有效范围。
+
+    夹回而不是报错,是因为按钮可能过期:上一屏还有 7 页,删掉一批之后只剩 3 页,
+    用户点的仍是旧消息上的「第 6 页」。
+    """
+    total = len(items)
+    total_pages = max(1, -(-total // size))
+    number = max(1, min(page or 1, total_pages))
+    start = (number - 1) * size
+    return Page(
+        items=list(items[start:start + size]),
+        number=number,
+        total_pages=total_pages,
+        total=total,
+        start=start,
+    )
+
+
+def page_slice(
+    total: int, page: int | None, size: int = PAGE_SIZE
+) -> tuple[int, int, int]:
+    """数据在 SQL 侧分页时用:返回 (夹好的页码, 总页数, offset)。
+
+    拿到结果后用 Page(...) 手工组装,就能复用 pager_row 渲染同一套翻页控件。
+    """
+    total_pages = max(1, -(-total // size))
+    number = max(1, min(page or 1, total_pages))
+    return number, total_pages, (number - 1) * size
+
+
+def pager_row(
+    cb_prefix: str, page: Page, *, suffix: str = ""
+) -> list[InlineKeyboardButton]:
+    """上一页 / 页码 / 下一页。单页时返回空列表。
+
+    回调拼成 f"{cb_prefix}{页码}{suffix}",所以 cb_prefix 传如
+    f"{CB_PANEL_NODES}{panel_id}:";页码后面还有参数的(如日志的筛选位)
+    用 suffix 补。中间的页码按钮只做展示,回调是 CB_NOOP(已注册 handler,
+    点了不会一直转圈)。
+    """
+    if not page.multi:
+        return []
+    return [
+        InlineKeyboardButton(
+            "⬅ 上一页", callback_data=f"{cb_prefix}{page.number - 1}{suffix}"
+        )
+        if page.number > 1
+        else InlineKeyboardButton("·", callback_data=CB_NOOP),
+        InlineKeyboardButton(
+            f"{page.number}/{page.total_pages}", callback_data=CB_NOOP
+        ),
+        InlineKeyboardButton(
+            "下一页 ➡", callback_data=f"{cb_prefix}{page.number + 1}{suffix}"
+        )
+        if page.number < page.total_pages
+        else InlineKeyboardButton("·", callback_data=CB_NOOP),
+    ]
+
+
+def split_page_arg(payload: str, parts: int) -> tuple[list[str], int | None]:
+    """拆 callback payload 尾部可选的页码。
+
+    payload 形如 "12:34" 或 "12:34:3",parts 是页码之前的固定段数。
+    返回 (固定段列表, 页码或 None)。
+    """
+    pieces = payload.split(":")
+    fixed = pieces[:parts]
+    page = int(pieces[parts]) if len(pieces) > parts and pieces[parts] else None
+    return fixed, page
+
+
+# Telegram 对「编辑成和原来一模一样的内容」会返回 400。这不是错误,是没变化。
+NOT_MODIFIED = "message is not modified"
+
+
+def is_not_modified(exc: BaseException) -> bool:
+    return isinstance(exc, BadRequest) and NOT_MODIFIED in str(exc).lower()
+
+
+async def safe_edit(target, text: str, **kwargs) -> bool:
+    """编辑消息,把「内容没变」当作正常情况吞掉。
+
+    target 传 CallbackQuery(走 edit_message_text)或 Message(走 edit_text)。
+    返回 True 表示消息真的被改了,False 表示内容与原来一致、Telegram 拒绝了编辑。
+    其余 BadRequest 照常抛出,不掩盖真问题。
+
+    典型场景:一分钟内连点两次「🔄 同步」,节点数没变 -> banner、「最近同步:
+    刚刚」、按钮全都逐字相同 -> 400 -> 以前会冒到全局 error handler,给用户
+    弹一条误导的「操作出错」。
+    """
+    editor = getattr(target, "edit_message_text", None) or target.edit_text
+    try:
+        await editor(text, **kwargs)
+        return True
+    except BadRequest as exc:
+        if is_not_modified(exc):
+            return False
+        raise
 
 
 def truncate(text: str, limit: int = 3500) -> str:
@@ -222,7 +359,7 @@ def humanize_age(when: datetime | None) -> str:
     """把 UTC 时间点转换为相对当前的中文描述(刚刚 / X 分钟前 / X 小时前 / X 天前)。"""
     if when is None:
         return "从未"
-    sec = int((datetime.utcnow() - when).total_seconds())
+    sec = int((utcnow() - when).total_seconds())
     if sec < 0:
         sec = 0
     if sec < 60:

@@ -29,7 +29,6 @@ from .common import (
     truncate,
 )
 
-
 log = logging.getLogger(__name__)
 
 

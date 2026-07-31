@@ -33,6 +33,10 @@ class Server(Base):
     username: Mapped[str] = mapped_column(String(64), nullable=False)
     auth_type: Mapped[str] = mapped_column(String(16), nullable=False)  # key / password
     credential: Mapped[str] = mapped_column(Text, nullable=False)
+    # 私钥口令(仅 auth_type=key 且私钥加密时有值,加密存储)
+    key_passphrase: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 首次连接记录的主机密钥指纹(SHA256:...),之后每次连接都要求一致
+    host_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     v2node_installed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -45,10 +49,13 @@ class Server(Base):
         onupdate=func.current_timestamp(),
     )
 
-    nodes: Mapped[list["Node"]] = relationship(
+    # lazy="select"(默认):没有任何代码用 server.nodes 读数据,节点一律走
+    # crud.list_nodes 显式查。之前是 selectin,导致每次 get_server /
+    # list_servers 都顺带把全部 nodes 拉进内存。保留 ORM cascade,删除
+    # 服务器时 AsyncSession.delete 会自行加载子表完成级联。
+    nodes: Mapped[list[Node]] = relationship(
         back_populates="server",
         cascade="all, delete-orphan",
-        lazy="selectin",
     )
 
 
@@ -96,10 +103,12 @@ class Panel(Base):
         onupdate=func.current_timestamp(),
     )
 
-    panel_nodes: Mapped[list["PanelNode"]] = relationship(
+    # 同 Server.nodes:节点走 crud.list_panel_nodes 显式查。这里若用 selectin,
+    # 每次 get_panel(几乎每个 handler 都会调)都会把该面板所有 panel_nodes
+    # 连同 raw_json 一起载入——500 个节点时单次 get_panel 从 2.4ms 涨到 11.6ms。
+    panel_nodes: Mapped[list[PanelNode]] = relationship(
         back_populates="panel",
         cascade="all, delete-orphan",
-        lazy="selectin",
     )
 
 

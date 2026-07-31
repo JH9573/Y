@@ -23,10 +23,10 @@ from telegram.ext import (
 
 from ..db import crud
 from ..services.cloudflare_api import (
-    CloudflareAPIError,
     PROXYABLE_TYPES,
     SUPPORTED_RECORD_TYPES,
     TTL_PRESETS,
+    CloudflareAPIError,
     validate_priority,
     validate_record_content,
     validate_record_name,
@@ -41,7 +41,6 @@ from .common import (
     NON_MENU_TEXT_FILTER,
     get_ctx,
 )
-
 
 log = logging.getLogger(__name__)
 

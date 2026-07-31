@@ -17,7 +17,6 @@ from xml.etree import ElementTree
 
 import httpx
 
-
 log = logging.getLogger(__name__)
 
 

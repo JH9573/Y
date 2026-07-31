@@ -19,6 +19,13 @@ from telegram.ext import (
     MessageHandler,
 )
 
+from ..core.ssh import (
+    SSHError,
+    check_key_passphrase,
+    key_needs_passphrase,
+    key_permission_warning,
+    validate_key_path,
+)
 from ..db import crud
 from ..db.models import Server
 from ..services.v2node import INSTALLED_CHECK_CMD
@@ -32,12 +39,11 @@ from .common import (
     main_menu_kb,
 )
 
-
 log = logging.getLogger(__name__)
 
 
 # 对话状态
-NAME, HOST, PORT, USERNAME, AUTH_TYPE, CREDENTIAL = range(6)
+NAME, HOST, PORT, USERNAME, AUTH_TYPE, CREDENTIAL, KEY_PASSPHRASE = range(7)
 
 # user_data 中保存中间数据所用的 key
 KEY = "addserver"
@@ -161,10 +167,50 @@ async def step_credential(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not raw:
             await update.message.reply_text("路径不能为空,请重新输入:")
             return CREDENTIAL
-        credential = raw
+        # 早点把路径问题暴露出来,别等到真去连服务器才报错
+        try:
+            credential = validate_key_path(raw)
+            needs_pass = key_needs_passphrase(credential)
+        except SSHError as exc:
+            await update.message.reply_text(f"{exc}\n请重新输入私钥路径:")
+            return CREDENTIAL
+        data["credential"] = credential
+        warning = key_permission_warning(credential)
+        if warning:
+            await update.message.reply_text(warning)
+        if needs_pass:
+            await update.message.reply_text(
+                "该私钥有口令保护,请输入口令。\n"
+                "(收到后 bot 会立即从聊天记录中删除该条消息并加密入库)"
+            )
+            return KEY_PASSPHRASE
         await update.message.reply_text("已记录密钥路径,开始测试连通性…")
 
     data["credential"] = credential
+    return await _finalize(update, context)
+
+
+async def step_key_passphrase(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    data = context.user_data[KEY]
+    raw = (update.message.text or "").strip()
+    with suppress(BadRequest):
+        await update.message.delete()
+    chat_id = update.effective_chat.id
+    if not raw:
+        await context.bot.send_message(chat_id=chat_id, text="口令不能为空,请重新输入:")
+        return KEY_PASSPHRASE
+    try:
+        check_key_passphrase(data["credential"], raw)
+    except SSHError as exc:
+        await context.bot.send_message(chat_id=chat_id, text=f"{exc}\n请重新输入口令:")
+        return KEY_PASSPHRASE
+    data["key_passphrase"] = get_ctx(context).crypto.encrypt(raw)
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="口令已加密保存,聊天记录中的明文消息已删除。开始测试连通性…",
+    )
     return await _finalize(update, context)
 
 
@@ -181,27 +227,37 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         username=data["username"],
         auth_type=data["auth_type"],
         credential=data["credential"],
+        key_passphrase=data.get("key_passphrase"),
         status="active",
         v2node_installed=False,
     )
-    ok = await ctx.ssh.check_connectivity(trial)
-    if not ok:
+    # 连通性测试 + 安装检测 + 读远程节点,原本要连三次;这里一条连接跑完,
+    # 建连失败即等价于连通性测试不通过。
+    remote_nodes: list | None = None
+    v2node_installed = False
+    try:
+        async with ctx.ssh.connection(trial) as conn:
+            try:
+                check = await conn.run(trial, INSTALLED_CHECK_CMD)
+                v2node_installed = check.stdout.strip() == "installed"
+            except SSHError:
+                v2node_installed = False
+            if v2node_installed:
+                try:
+                    remote_nodes = await read_remote_nodes(conn, trial)
+                except Exception:  # noqa: BLE001
+                    log.exception("导入节点失败,服务器 %s", data["name"])
+                    remote_nodes = None
+    except SSHError as exc:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="SSH 连通性测试失败,服务器未登记。请检查地址、端口、用户名、凭据后重试。",
+            text=f"SSH 连通性测试失败,服务器未登记:\n{exc}",
             reply_markup=main_menu_kb(),
         )
         context.user_data.pop(KEY, None)
         return ConversationHandler.END
 
-    # 检测 v2node 是否已安装
-    try:
-        check = await ctx.ssh.run(trial, INSTALLED_CHECK_CMD)
-        v2node_installed = check.stdout.strip() == "installed"
-    except Exception:  # noqa: BLE001
-        v2node_installed = False
-
-    # 写库,并尝试导入节点
+    # 写库,并把刚读到的远程节点导入
     async with crud.session() as s:
         server = await crud.create_server(
             s,
@@ -211,13 +267,16 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             username=data["username"],
             auth_type=data["auth_type"],
             credential=data["credential"],
+            key_passphrase=data.get("key_passphrase"),
+            # 首次连接时 TOFU 记下的指纹,建档时一并存下
+            host_key=trial.host_key,
             v2node_installed=v2node_installed,
         )
-        # 写库后立即读取一次远程节点,导入到 nodes 表
         imported = 0
         if v2node_installed:
-            try:
-                remote_nodes = await read_remote_nodes(ctx.ssh, server)
+            if remote_nodes is None:
+                imported = -1  # 标记为导入失败
+            else:
                 items = [
                     {
                         "api_host": n.api_host,
@@ -228,9 +287,6 @@ async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                     for n in remote_nodes
                 ]
                 imported = await crud.replace_nodes(s, server.id, items)
-            except Exception:  # noqa: BLE001
-                log.exception("导入节点失败,服务器 %s", server.name)
-                imported = -1  # 标记为导入失败
         await crud.add_log(
             s,
             user_id=update.effective_user.id,
@@ -288,6 +344,9 @@ def register(application, ctx) -> None:
             USERNAME: [MessageHandler(NON_MENU_TEXT_FILTER, step_username)],
             AUTH_TYPE: [CallbackQueryHandler(step_auth_type, pattern=r"^auth:(key|password)$")],
             CREDENTIAL: [MessageHandler(NON_MENU_TEXT_FILTER, step_credential)],
+            KEY_PASSPHRASE: [
+                MessageHandler(NON_MENU_TEXT_FILTER, step_key_passphrase)
+            ],
         },
         fallbacks=[
             CommandHandler("cancel", cmd_cancel),

@@ -5,9 +5,7 @@
 """
 from __future__ import annotations
 
-import asyncio
 import logging
-from functools import wraps
 
 from telegram.ext import (
     Application,
@@ -32,11 +30,11 @@ from .handlers import (
     cos_config,
     dns,
     dns_record,
-    edit_remote_file,
     edit_dns_account,
     edit_panel,
     edit_panel_node,
     edit_panel_notice,
+    edit_remote_file,
     edit_server,
     firewall,
     install,
@@ -55,11 +53,10 @@ from .handlers import (
     uninstall,
     update_bot,
 )
-from .handlers.common import AppContext, CTX_KEY
+from .handlers.common import CTX_KEY, AppContext, is_not_modified
 from .services.cloudflare_api import CloudflareClient
 from .services.github_release import GitHubReleaseClient
 from .services.v2board_api import V2BoardClient
-
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +103,12 @@ def _wrap_with_auth(application: Application, allowed: frozenset[int]) -> None:
 
 
 async def _error_handler(update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # 「编辑成和原内容一样」不是错误,只是没变化。以前它会一路冒到这里,
+    # 给用户回一条误导的「操作出错」。渲染路径应尽量用 common.safe_edit,
+    # 这里是兜底,保证任何一处漏用都不会打扰用户。
+    if is_not_modified(context.error):
+        log.debug("忽略 message-is-not-modified: %s", context.error)
+        return
     log.exception("未捕获异常", exc_info=context.error)
     if update and hasattr(update, "effective_message") and update.effective_message:
         try:
@@ -119,9 +122,25 @@ async def _error_handler(update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _post_init(application: Application) -> None:
     cfg = application.bot_data[CTX_KEY].config
     await crud.init_db(cfg.db_url)
+    # 操作日志只增不减,启动时清理一次过期记录
+    async with crud.session() as s:
+        pruned = await crud.prune_logs(s)
+        await s.commit()
+    if pruned:
+        log.info(
+            "已清理 %d 条超过 %d 天的操作日志", pruned, crud.LOG_RETENTION_DAYS
+        )
     log.info("bot 已就绪,授权用户 %s", sorted(cfg.allowed_user_ids))
     # 若上次是通过「更新重启」退出的,回执一条「重启完成」
     await update_bot.notify_restart_done(application)
+
+
+async def _record_host_key(server, fingerprint: str) -> None:
+    """首次连上某台服务器时把主机密钥指纹落库(TOFU)。"""
+    async with crud.session() as s:
+        await crud.set_server_host_key(s, server.id, fingerprint)
+        await s.commit()
+    log.info("已记录 %s 的主机密钥指纹 %s", server.name, fingerprint)
 
 
 def build_application() -> Application:
@@ -129,7 +148,9 @@ def build_application() -> Application:
     _setup_logging(cfg.log_level)
 
     crypto = Crypto(cfg.cred_encryption_key)
-    ssh_client = SSHClient(crypto, timeout=cfg.ssh_timeout)
+    ssh_client = SSHClient(
+        crypto, timeout=cfg.ssh_timeout, on_host_key=_record_host_key
+    )
     v2board_client = V2BoardClient(crypto, timeout=cfg.ssh_timeout)
     cloudflare_client = CloudflareClient(crypto, timeout=cfg.ssh_timeout)
     github_client = GitHubReleaseClient(crypto, timeout=cfg.ssh_timeout)
@@ -145,6 +166,12 @@ def build_application() -> Application:
     application = (
         ApplicationBuilder()
         .token(cfg.bot_token)
+        # PTB 默认 max_concurrent_updates=1,即所有 update 严格排队。本 bot 有
+        # 分钟级的长任务(装 v2node 要 apt-get + 下载;发布要下载几百 MB 再传
+        # OSS),排队意味着这期间任何人点任何按钮都没反应,连「取消」都点不动。
+        # 放开到 4:长任务占一个槽,其余交互照常。DB 侧靠 SQLite WAL 承接并发
+        # (见 crud._apply_sqlite_pragmas)。
+        .concurrent_updates(cfg.max_concurrent_updates)
         .post_init(_post_init)
         .build()
     )

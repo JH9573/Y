@@ -19,7 +19,6 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
-    filters,
 )
 
 from ..db import crud
@@ -38,7 +37,6 @@ from .common import (
     NON_MENU_TEXT_FILTER,
     get_ctx,
 )
-
 
 log = logging.getLogger(__name__)
 

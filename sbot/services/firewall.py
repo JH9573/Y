@@ -8,8 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..core.ssh import SSHClient, SSHError
-
+from ..core.ssh import SSHError, SSHRunner
 
 # v2node 进程名,用于从 ss / netstat 输出里挑出它监听的端口
 _PROC_NAME = "v2node"
@@ -101,7 +100,7 @@ def _parse_netstat(out: str) -> set[tuple[str, int]]:
 
 
 async def detect_listening_ports(
-    ssh: SSHClient, server
+    ssh: SSHRunner, server
 ) -> tuple[list[ListenPort], str | None]:
     """实测 v2node 监听的端口。返回 (端口列表, 跳过原因)。"""
     try:
@@ -135,7 +134,7 @@ async def detect_listening_ports(
 
 # ---------- 防火墙检测 ----------
 
-async def _detect_manager(ssh: SSHClient, server) -> tuple[str | None, bool]:
+async def _detect_manager(ssh: SSHRunner, server) -> tuple[str | None, bool]:
     """返回 (manager, active)。只认 ufw / firewalld。"""
     res = await ssh.run(
         server,
@@ -174,7 +173,7 @@ def _ufw_status_allows(text: str, proto: str, port: int) -> bool:
 
 
 async def _is_allowed(
-    ssh: SSHClient, server, manager: str, proto: str, port: int,
+    ssh: SSHRunner, server, manager: str, proto: str, port: int,
     *, ufw_text: str | None = None,
 ) -> bool:
     if manager == "ufw":
@@ -189,7 +188,7 @@ async def _is_allowed(
     return False
 
 
-async def check_ports(ssh: SSHClient, server) -> PortCheck:
+async def check_ports(ssh: SSHRunner, server) -> PortCheck:
     """完整体检:监听端口 + 防火墙状态 + 每个端口是否已放行。"""
     ports, note = await detect_listening_ports(ssh, server)
     if note is not None:
@@ -231,7 +230,7 @@ async def check_ports(ssh: SSHClient, server) -> PortCheck:
 # ---------- 放行 ----------
 
 async def open_port(
-    ssh: SSHClient, server, manager: str, proto: str, port: int
+    ssh: SSHRunner, server, manager: str, proto: str, port: int
 ) -> tuple[bool, str]:
     port = int(port)
     if proto not in _VALID_PROTO:
@@ -253,7 +252,7 @@ async def open_port(
 
 
 async def open_unallowed(
-    ssh: SSHClient, server
+    ssh: SSHRunner, server
 ) -> tuple[str | None, list[ListenPort], list[tuple[ListenPort, str]]]:
     """重新体检后放行所有未放行端口。返回 (manager, 成功列表, 失败列表)。"""
     check = await check_ports(ssh, server)

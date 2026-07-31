@@ -21,9 +21,9 @@ import asyncio
 import copy
 import hashlib
 import os
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
-
+from typing import Any
 
 # 平台识别: 先看扩展名,再看文件名里的关键字。顺序即优先级。
 _PLATFORM_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (

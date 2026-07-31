@@ -1,6 +1,6 @@
 """面板 v2node 节点列表 / 详情 / 上下架 / 删除 / 同步。
 
-列表与详情从本地 panel_nodes 表读取(添加面板时已初始化拉取);
+列表与详情从本地 panel_nodes 表读取(添加面板时已初始化拉取),列表分页展示;
 上下架 / 删除调远端 API,成功后乐观更新本地缓存;
 列表底部的「🔄 同步」按钮可手动从面板覆盖整张缓存表。
 """
@@ -29,14 +29,16 @@ from .common import (
     CB_PANEL_PREFIX,
     get_ctx,
     humanize_age,
+    pager_row,
+    paginate,
+    safe_edit,
     truncate,
 )
 
-
 log = logging.getLogger(__name__)
 
-# 防止 inline 按钮过多;v2board 一般不会超过这个量级
-NODE_LIST_LIMIT = 50
+# user_data 里记住每个面板最近浏览的页码,详情/删除/同步后能回到原页
+PAGE_MEMO_KEY = "panel_node_page"
 
 # v2board ServerService::mergeData 里的 available_status 取值
 AVAILABLE_STATUS_TEXT = {0: "离线", 1: "异常", 2: "正常"}
@@ -51,13 +53,30 @@ def _health_text(status: int | None) -> str:
     return AVAILABLE_STATUS_TEXT.get(status, "未知")
 
 
+def _remembered_page(context: ContextTypes.DEFAULT_TYPE, panel_id: int) -> int:
+    memo = context.user_data.get(PAGE_MEMO_KEY) or {}
+    return memo.get(panel_id, 1)
+
+
+def _remember_page(
+    context: ContextTypes.DEFAULT_TYPE, panel_id: int, page: int
+) -> None:
+    context.user_data.setdefault(PAGE_MEMO_KEY, {})[panel_id] = page
+
+
 # ---------- 列表 ----------
 
 async def cb_list_nodes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    panel_id = int(query.data.split(":", 1)[1])
-    await _render_node_list(update, context, panel_id)
+    payload = query.data.split(":", 1)[1]
+    panel_id_s, _, page_s = payload.partition(":")
+    await _render_node_list(
+        update,
+        context,
+        int(panel_id_s),
+        page=int(page_s) if page_s else None,
+    )
 
 
 async def _render_node_list(
@@ -65,8 +84,10 @@ async def _render_node_list(
     context: ContextTypes.DEFAULT_TYPE,
     panel_id: int,
     *,
+    page: int | None = None,
     banner: str | None = None,
 ) -> None:
+    """page=None 表示沿用该面板上次浏览的页码(越界会被夹回有效范围)。"""
     query = update.callback_query
     async with crud.session() as s:
         panel = await crud.get_panel(s, panel_id)
@@ -84,6 +105,7 @@ async def _render_node_list(
     header_lines.append(f"最近同步: {humanize_age(latest_sync)}")
 
     if not nodes:
+        _remember_page(context, panel_id, 1)
         kb = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton(
@@ -100,14 +122,19 @@ async def _render_node_list(
         )
         header_lines.append("")
         header_lines.append("(暂无节点) 点「🔄 同步」从面板拉取或「➕ 添加」新建。")
-        await query.edit_message_text("\n".join(header_lines), reply_markup=kb)
+        await safe_edit(query, "\n".join(header_lines), reply_markup=kb)
         return
 
+    view = paginate(nodes, page if page is not None else _remembered_page(context, panel_id))
+    _remember_page(context, panel_id, view.number)
+
+    if view.multi:
+        header_lines.append(view.label)
     header_lines.append("")
     header_lines.append("图例: 🟢正常 🟡异常 🔴离线 ⚪未知 / ✅上架 ❌下架 / 🔁中转")
 
     rows: list[list[InlineKeyboardButton]] = []
-    for n in nodes[:NODE_LIST_LIMIT]:
+    for n in view.items:
         health = _health_emoji(n.available_status)
         show_mark = "✅" if n.show else "❌"
         relay = "🔁" if n.parent_id else ""
@@ -118,8 +145,10 @@ async def _render_node_list(
                 callback_data=f"{CB_PANEL_NODE}{panel_id}:{n.node_id}",
             )]
         )
-    if len(nodes) > NODE_LIST_LIMIT:
-        header_lines.append(f"…仅显示前 {NODE_LIST_LIMIT} 个,共 {len(nodes)}")
+
+    pager = pager_row(f"{CB_PANEL_NODES}{panel_id}:", view)
+    if pager:
+        rows.append(pager)
 
     rows.append(
         [InlineKeyboardButton(
@@ -137,7 +166,8 @@ async def _render_node_list(
             ),
         ]
     )
-    await query.edit_message_text(
+    await safe_edit(
+        query,
         truncate("\n".join(header_lines)),
         reply_markup=InlineKeyboardMarkup(rows),
     )
@@ -221,8 +251,8 @@ async def _render_node_detail(
             callback_data=f"{CB_PANEL_NODES}{panel_id}",
         ),
     ])
-    await query.edit_message_text(
-        truncate(text), reply_markup=InlineKeyboardMarkup(rows)
+    await safe_edit(
+        query, truncate(text), reply_markup=InlineKeyboardMarkup(rows)
     )
 
 
@@ -550,7 +580,9 @@ async def cb_sync_nodes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 def register(application, ctx) -> None:
     application.add_handler(
-        CallbackQueryHandler(cb_list_nodes, pattern=f"^{CB_PANEL_NODES}\\d+$")
+        CallbackQueryHandler(
+            cb_list_nodes, pattern=f"^{CB_PANEL_NODES}\\d+(:\\d+)?$"
+        )
     )
     application.add_handler(
         CallbackQueryHandler(

@@ -37,7 +37,6 @@ from .cos_config import load_cos
 from .release import PUBLISH_KEY
 from .remote_config import build_detail_text, detail_keyboard
 
-
 log = logging.getLogger(__name__)
 
 

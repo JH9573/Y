@@ -21,14 +21,15 @@ from .common import (
     CB_MENU_DNS_ADD,
     CB_MENU_DNS_LIST,
     CB_MENU_OSS_CFG,
+    CB_MENU_PNL_ADD,
     CB_MENU_PNL_LIST,
     CB_MENU_RCFG_ADD,
     CB_MENU_RCFG_LIST,
     CB_MENU_REL_ADD,
     CB_MENU_REL_LIST,
-    CB_MENU_SRV_LIST,
-    CB_MENU_PNL_ADD,
     CB_MENU_SRV_ADD,
+    CB_MENU_SRV_LIST,
+    CB_NOOP,
     MENU_CANCEL,
     MENU_DNS_GROUP,
     MENU_LOGS,
@@ -38,7 +39,6 @@ from .common import (
     MENU_SERVER_GROUP,
     main_menu_kb,
 )
-
 
 log = logging.getLogger(__name__)
 
@@ -150,6 +150,15 @@ async def cancel_outside_conv(
     )
 
 
+async def cb_noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """纯展示按钮(如分页里的「2/7」)。
+
+    没有这个 handler 的话,callback query 永远得不到 answer,客户端上那个
+    按钮会一直转圈到超时。
+    """
+    await update.callback_query.answer()
+
+
 def register(application, ctx) -> None:
     # 一级菜单按钮(reply keyboard 文本)
     application.add_handler(
@@ -188,4 +197,8 @@ def register(application, ctx) -> None:
     )
     application.add_handler(
         CallbackQueryHandler(cb_menu_rcfg_list, pattern=f"^{CB_MENU_RCFG_LIST}$")
+    )
+    # 纯展示按钮的兜底 answer(分页页码等)
+    application.add_handler(
+        CallbackQueryHandler(cb_noop, pattern=f"^{CB_NOOP}$")
     )

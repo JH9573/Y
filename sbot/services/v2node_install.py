@@ -8,14 +8,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import AsyncIterator
 
-from ..core.ssh import SSHClient, SSHError
+from ..core.ssh import SSHError, SSHRunner
 from ..db.models import Server
 from .v2node import IS_ACTIVE_CMD
 from .v2node_config import CONFIG_PATH, NodeEntry, serialize_config
-
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +68,7 @@ class InstallParams:
     version: str | None = None  # None 表示取 latest
 
 
-async def _run(ssh: SSHClient, server: Server, cmd: str, step: str) -> str:
+async def _run(ssh: SSHRunner, server: Server, cmd: str, step: str) -> str:
     try:
         res = await ssh.run(server, cmd, check=True)
     except SSHError as exc:
@@ -77,7 +76,7 @@ async def _run(ssh: SSHClient, server: Server, cmd: str, step: str) -> str:
     return res.stdout
 
 
-async def _detect_arch(ssh: SSHClient, server: Server) -> str:
+async def _detect_arch(ssh: SSHRunner, server: Server) -> str:
     out = await _run(ssh, server, "uname -m", "arch")
     machine = out.strip()
     if machine == "x86_64":
@@ -87,7 +86,7 @@ async def _detect_arch(ssh: SSHClient, server: Server) -> str:
     raise InstallError("arch", f"暂不支持的 CPU 架构: {machine}")
 
 
-async def _precheck_and_clean_stale(ssh: SSHClient, server: Server) -> bool:
+async def _precheck_and_clean_stale(ssh: SSHRunner, server: Server) -> bool:
     """检测前次失败安装遗留的状态;若存在则清理,以便重试。
 
     本函数只在 bot 端已认定该服务器未安装(server.v2node_installed=False)的
@@ -118,7 +117,7 @@ async def _precheck_and_clean_stale(ssh: SSHClient, server: Server) -> bool:
     return True
 
 
-async def _ensure_deps(ssh: SSHClient, server: Server) -> str:
+async def _ensure_deps(ssh: SSHRunner, server: Server) -> str:
     """检测并安装 curl / unzip。返回使用的下载工具名("curl" 或 "wget")。"""
     res = await ssh.run(
         server,
@@ -145,7 +144,7 @@ async def _ensure_deps(ssh: SSHClient, server: Server) -> str:
     return fetcher
 
 
-async def _resolve_version(ssh: SSHClient, server: Server, fetcher: str, version: str | None) -> str:
+async def _resolve_version(ssh: SSHRunner, server: Server, fetcher: str, version: str | None) -> str:
     if version:
         return version.lstrip("v") if version.startswith("v") else version
     # 从 GitHub API 取最新 tag
@@ -163,7 +162,7 @@ async def _resolve_version(ssh: SSHClient, server: Server, fetcher: str, version
 
 
 async def _download_and_extract(
-    ssh: SSHClient, server: Server, fetcher: str, tag: str, arch: str
+    ssh: SSHRunner, server: Server, fetcher: str, tag: str, arch: str
 ) -> None:
     url = GITHUB_RELEASE_DOWNLOAD.format(tag=tag, arch=arch)
     tmp_zip = "/tmp/v2node-install.zip"
@@ -197,7 +196,7 @@ async def _download_and_extract(
     await ssh.run(server, f"rm -rf {tmp_zip} {tmp_dir}")
 
 
-async def _write_systemd_unit(ssh: SSHClient, server: Server) -> None:
+async def _write_systemd_unit(ssh: SSHRunner, server: Server) -> None:
     try:
         await ssh.write_file(server, SYSTEMD_UNIT_PATH, SYSTEMD_UNIT)
     except SSHError as exc:
@@ -205,7 +204,7 @@ async def _write_systemd_unit(ssh: SSHClient, server: Server) -> None:
 
 
 async def _write_initial_config(
-    ssh: SSHClient, server: Server, first_node: NodeEntry
+    ssh: SSHRunner, server: Server, first_node: NodeEntry
 ) -> None:
     cfg = {
         "Log": {"Level": "warning", "Output": "", "Access": "none"},
@@ -217,7 +216,7 @@ async def _write_initial_config(
         raise InstallError("config", str(exc)) from exc
 
 
-async def _enable_and_start(ssh: SSHClient, server: Server) -> None:
+async def _enable_and_start(ssh: SSHRunner, server: Server) -> None:
     await _run(ssh, server, "systemctl daemon-reload", "daemon-reload")
     await _run(ssh, server, "systemctl enable v2node", "enable")
     await _run(ssh, server, "systemctl start v2node", "start")
@@ -232,7 +231,7 @@ async def _enable_and_start(ssh: SSHClient, server: Server) -> None:
 
 
 async def install_v2node(
-    ssh: SSHClient,
+    ssh: SSHRunner,
     server: Server,
     params: InstallParams,
 ) -> AsyncIterator[InstallProgress]:

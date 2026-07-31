@@ -4,17 +4,19 @@
 """
 from __future__ import annotations
 
-from typing import Iterable, Optional
+import logging
+from collections.abc import Iterable
+from datetime import datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, event, func, select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 
-from datetime import datetime
-
+from ..core.redact import redact
+from ..core.timeutil import utcnow
 from .models import (
     Base,
     CosConfig,
@@ -29,36 +31,70 @@ from .models import (
     Server,
 )
 
+log = logging.getLogger(__name__)
 
 _engine = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+def _apply_sqlite_pragmas(dbapi_conn, _record) -> None:
+    """每条新连接都要设的 SQLite PRAGMA。
+
+    handler 现在是并发处理的(见 main.build_application),默认的 rollback
+    journal 下「一写多读」会直接抛 database is locked,所以:
+    - journal_mode=WAL: 读写不再互斥(该设置写进库文件头,持久生效)
+    - busy_timeout:    真的撞上写锁时先等一会儿,而不是立刻报错
+    """
+    cur = dbapi_conn.cursor()
+    try:
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+    finally:
+        cur.close()
 
 
 async def init_db(db_url: str) -> None:
     """初始化引擎,建表。idempotent。"""
     global _engine, _session_factory
     _engine = create_async_engine(db_url, future=True)
+    if db_url.startswith("sqlite"):
+        event.listen(_engine.sync_engine, "connect", _apply_sqlite_pragmas)
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await _migrate_panels(conn)
+        await _ensure_columns(conn)
 
 
-async def _migrate_panels(conn) -> None:
-    """对老库补齐 panels 表的新列(SQLite ALTER TABLE)。
+# 建表之后补加的列。create_all 只建新表、不会 ALTER 已存在的表,所以每次给
+# 已有模型加列,都必须在这里登记一份 "列名 -> 列定义",老库才会被补齐。
+# 只支持 ADD COLUMN 能表达的变更(可空、或带常量默认值);改类型 / 加约束
+# 需要走重建表,那种情况请单独写迁移。
+ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "panels": {
+        "api_host": "TEXT",
+        "api_key": "TEXT",
+    },
+    "servers": {
+        "key_passphrase": "TEXT",
+        "host_key": "TEXT",
+    },
+}
 
-    create_all 不会 ALTER 已存在的表,所以这里手动补 api_host / api_key。
-    """
-    result = await conn.exec_driver_sql("PRAGMA table_info(panels)")
-    cols = {row[1] for row in result.fetchall()}
-    if "api_host" not in cols:
-        await conn.exec_driver_sql(
-            "ALTER TABLE panels ADD COLUMN api_host TEXT"
-        )
-    if "api_key" not in cols:
-        await conn.exec_driver_sql(
-            "ALTER TABLE panels ADD COLUMN api_key TEXT"
-        )
+
+async def _ensure_columns(conn) -> None:
+    """按 ADDED_COLUMNS 给老库补列,已存在的跳过。idempotent。"""
+    for table, columns in ADDED_COLUMNS.items():
+        result = await conn.exec_driver_sql(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in result.fetchall()}
+        if not existing:  # 表还不存在(create_all 会建),无需补列
+            continue
+        for name, ddl in columns.items():
+            if name in existing:
+                continue
+            await conn.exec_driver_sql(
+                f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"
+            )
+            log.info("已为老库补列: %s.%s %s", table, name, ddl)
 
 
 def session() -> AsyncSession:
@@ -74,11 +110,11 @@ async def list_servers(s: AsyncSession) -> list[Server]:
     return list(result.scalars().all())
 
 
-async def get_server(s: AsyncSession, server_id: int) -> Optional[Server]:
+async def get_server(s: AsyncSession, server_id: int) -> Server | None:
     return await s.get(Server, server_id)
 
 
-async def get_server_by_name(s: AsyncSession, name: str) -> Optional[Server]:
+async def get_server_by_name(s: AsyncSession, name: str) -> Server | None:
     result = await s.execute(select(Server).where(Server.name == name))
     return result.scalar_one_or_none()
 
@@ -92,6 +128,8 @@ async def create_server(
     username: str,
     auth_type: str,
     credential: str,
+    key_passphrase: str | None = None,
+    host_key: str | None = None,
     v2node_installed: bool = False,
     status: str = "active",
 ) -> Server:
@@ -102,6 +140,8 @@ async def create_server(
         username=username,
         auth_type=auth_type,
         credential=credential,
+        key_passphrase=key_passphrase,
+        host_key=host_key,
         v2node_installed=v2node_installed,
         status=status,
     )
@@ -120,14 +160,20 @@ async def update_server(
     s: AsyncSession,
     server_id: int,
     *,
-    name: Optional[str] = None,
-    host: Optional[str] = None,
-    username: Optional[str] = None,
-    port: Optional[int] = None,
-    auth_type: Optional[str] = None,
-    credential: Optional[str] = None,
-) -> Optional[Server]:
-    """更新服务器的可改字段;只更新传入的非 None 项。"""
+    name: str | None = None,
+    host: str | None = None,
+    username: str | None = None,
+    port: int | None = None,
+    auth_type: str | None = None,
+    credential: str | None = None,
+    key_passphrase: str | None = None,
+    clear_key_passphrase: bool = False,
+) -> Server | None:
+    """更新服务器的可改字段;只更新传入的非 None 项。
+
+    改了认证方式 / 凭据后主机不变,故 host_key 不动;要重置指纹用
+    clear_server_host_key。clear_key_passphrase 用于换成不带口令的私钥。
+    """
     server = await s.get(Server, server_id)
     if server is None:
         return None
@@ -143,6 +189,10 @@ async def update_server(
         server.auth_type = auth_type
     if credential is not None:
         server.credential = credential
+    if key_passphrase is not None:
+        server.key_passphrase = key_passphrase
+    elif clear_key_passphrase:
+        server.key_passphrase = None
     return server
 
 
@@ -152,6 +202,22 @@ async def set_v2node_installed(
     server = await s.get(Server, server_id)
     if server is not None:
         server.v2node_installed = installed
+
+
+async def set_server_host_key(
+    s: AsyncSession, server_id: int, fingerprint: str
+) -> None:
+    """记录首次连接看到的主机密钥指纹。"""
+    server = await s.get(Server, server_id)
+    if server is not None:
+        server.host_key = fingerprint
+
+
+async def clear_server_host_key(s: AsyncSession, server_id: int) -> None:
+    """清掉已记录的指纹,下次连接重新 TOFU(服务器重装后用)。"""
+    server = await s.get(Server, server_id)
+    if server is not None:
+        server.host_key = None
 
 
 async def delete_server(s: AsyncSession, server_id: int) -> None:
@@ -169,13 +235,13 @@ async def list_nodes(s: AsyncSession, server_id: int) -> list[Node]:
     return list(result.scalars().all())
 
 
-async def get_node(s: AsyncSession, node_pk: int) -> Optional[Node]:
+async def get_node(s: AsyncSession, node_pk: int) -> Node | None:
     return await s.get(Node, node_pk)
 
 
 async def find_node(
     s: AsyncSession, server_id: int, api_host: str, node_id: int
-) -> Optional[Node]:
+) -> Node | None:
     result = await s.execute(
         select(Node).where(
             Node.server_id == server_id,
@@ -250,11 +316,11 @@ async def list_panels(s: AsyncSession) -> list[Panel]:
     return list(result.scalars().all())
 
 
-async def get_panel(s: AsyncSession, panel_id: int) -> Optional[Panel]:
+async def get_panel(s: AsyncSession, panel_id: int) -> Panel | None:
     return await s.get(Panel, panel_id)
 
 
-async def get_panel_by_name(s: AsyncSession, name: str) -> Optional[Panel]:
+async def get_panel_by_name(s: AsyncSession, name: str) -> Panel | None:
     result = await s.execute(select(Panel).where(Panel.name == name))
     return result.scalar_one_or_none()
 
@@ -280,7 +346,7 @@ async def create_panel(
         api_host=api_host,
         api_key=api_key,
         auth_data=auth_data,
-        auth_data_updated_at=datetime.utcnow() if auth_data else None,
+        auth_data_updated_at=utcnow() if auth_data else None,
     )
     s.add(panel)
     await s.flush()
@@ -291,7 +357,7 @@ async def update_panel_auth(s: AsyncSession, panel_id: int, auth_data: str) -> N
     panel = await s.get(Panel, panel_id)
     if panel is not None:
         panel.auth_data = auth_data
-        panel.auth_data_updated_at = datetime.utcnow()
+        panel.auth_data_updated_at = utcnow()
 
 
 async def update_panel(
@@ -331,7 +397,7 @@ async def list_panel_nodes(s: AsyncSession, panel_id: int) -> list[PanelNode]:
 
 async def get_panel_node(
     s: AsyncSession, panel_id: int, node_id: int
-) -> Optional[PanelNode]:
+) -> PanelNode | None:
     result = await s.execute(
         select(PanelNode).where(
             PanelNode.panel_id == panel_id,
@@ -349,7 +415,7 @@ async def replace_panel_nodes(
     """以远程为准覆盖该面板的节点缓存,返回最终节点数量。"""
     await s.execute(delete(PanelNode).where(PanelNode.panel_id == panel_id))
     count = 0
-    now = datetime.utcnow()
+    now = utcnow()
     for item in items:
         payload = dict(item)
         payload.setdefault("synced_at", now)
@@ -377,7 +443,7 @@ async def delete_panel_node(
 
 async def latest_node_sync_at(
     s: AsyncSession, panel_id: int
-) -> Optional[datetime]:
+) -> datetime | None:
     """最近一次成功同步的时间,空表返回 None。"""
     result = await s.execute(
         select(PanelNode.synced_at)
@@ -395,13 +461,13 @@ async def list_dns_accounts(s: AsyncSession) -> list[DnsAccount]:
     return list(result.scalars().all())
 
 
-async def get_dns_account(s: AsyncSession, account_id: int) -> Optional[DnsAccount]:
+async def get_dns_account(s: AsyncSession, account_id: int) -> DnsAccount | None:
     return await s.get(DnsAccount, account_id)
 
 
 async def get_dns_account_by_name(
     s: AsyncSession, name: str
-) -> Optional[DnsAccount]:
+) -> DnsAccount | None:
     result = await s.execute(select(DnsAccount).where(DnsAccount.name == name))
     return result.scalar_one_or_none()
 
@@ -454,13 +520,13 @@ async def list_release_sources(s: AsyncSession) -> list[ReleaseSource]:
 
 async def get_release_source(
     s: AsyncSession, source_id: int
-) -> Optional[ReleaseSource]:
+) -> ReleaseSource | None:
     return await s.get(ReleaseSource, source_id)
 
 
 async def get_release_source_by_repo(
     s: AsyncSession, repo: str
-) -> Optional[ReleaseSource]:
+) -> ReleaseSource | None:
     result = await s.execute(
         select(ReleaseSource).where(ReleaseSource.repo == repo)
     )
@@ -487,7 +553,7 @@ async def delete_release_source(s: AsyncSession, source_id: int) -> None:
 
 # ---------- oss config ----------
 
-async def get_oss_config(s: AsyncSession) -> Optional[OssConfig]:
+async def get_oss_config(s: AsyncSession) -> OssConfig | None:
     """单行配置,取第一条。"""
     result = await s.execute(select(OssConfig).order_by(OssConfig.id).limit(1))
     return result.scalar_one_or_none()
@@ -525,7 +591,7 @@ async def delete_oss_config(s: AsyncSession) -> None:
 
 # ---------- cos config ----------
 
-async def get_cos_config(s: AsyncSession) -> Optional[CosConfig]:
+async def get_cos_config(s: AsyncSession) -> CosConfig | None:
     """单行配置,取第一条。"""
     result = await s.execute(select(CosConfig).order_by(CosConfig.id).limit(1))
     return result.scalar_one_or_none()
@@ -568,13 +634,13 @@ async def list_remote_files(s: AsyncSession) -> list[RemoteConfigFile]:
 
 async def get_remote_file(
     s: AsyncSession, file_id: int
-) -> Optional[RemoteConfigFile]:
+) -> RemoteConfigFile | None:
     return await s.get(RemoteConfigFile, file_id)
 
 
 async def get_remote_file_by_path(
     s: AsyncSession, path: str
-) -> Optional[RemoteConfigFile]:
+) -> RemoteConfigFile | None:
     result = await s.execute(
         select(RemoteConfigFile).where(RemoteConfigFile.path == path)
     )
@@ -605,19 +671,52 @@ async def add_log(
     result: str,
     detail: str | None = None,
 ) -> None:
+    """写一条操作日志。detail 统一脱敏,避免第三方异常原文把凭据带进明文表。"""
     s.add(
         OperationLog(
             user_id=user_id,
             server_id=server_id,
             action=action,
             result=result,
-            detail=detail,
+            detail=redact(detail),
         )
     )
 
 
-async def recent_logs(s: AsyncSession, limit: int = 20) -> list[OperationLog]:
+# 操作日志保留天数。日志只增不减会让库无限膨胀,启动时清理一次。
+LOG_RETENTION_DAYS = 90
+
+
+def _log_filter(stmt, only_failed: bool):
+    return stmt.where(OperationLog.result != "success") if only_failed else stmt
+
+
+async def count_logs(s: AsyncSession, *, only_failed: bool = False) -> int:
+    stmt = _log_filter(select(func.count()).select_from(OperationLog), only_failed)
+    return int((await s.execute(stmt)).scalar_one())
+
+
+async def list_logs(
+    s: AsyncSession,
+    *,
+    limit: int,
+    offset: int = 0,
+    only_failed: bool = False,
+) -> list[OperationLog]:
+    """按时间倒序分页取日志。"""
+    stmt = _log_filter(select(OperationLog), only_failed)
     result = await s.execute(
-        select(OperationLog).order_by(OperationLog.id.desc()).limit(limit)
+        stmt.order_by(OperationLog.id.desc()).limit(limit).offset(offset)
     )
     return list(result.scalars().all())
+
+
+async def prune_logs(
+    s: AsyncSession, keep_days: int = LOG_RETENTION_DAYS
+) -> int:
+    """删除 keep_days 之前的日志,返回删除条数。"""
+    cutoff = utcnow() - timedelta(days=keep_days)
+    result = await s.execute(
+        delete(OperationLog).where(OperationLog.created_at < cutoff)
+    )
+    return result.rowcount or 0
