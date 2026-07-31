@@ -17,6 +17,7 @@ from .common import (
     CB_DEL_PANEL_OK,
     CB_EDIT_PANEL,
     CB_PANEL_NODES,
+    CB_PANEL_NOTICES,
     CB_PANEL_PREFIX,
     CB_SYNC_PANEL_CREDS,
     humanize_age,
@@ -104,6 +105,9 @@ async def _render_panel_menu(
         [
             InlineKeyboardButton(
                 "📋 节点列表", callback_data=f"{CB_PANEL_NODES}{panel.id}"
+            ),
+            InlineKeyboardButton(
+                "📢 公告管理", callback_data=f"{CB_PANEL_NOTICES}{panel.id}:1"
             ),
         ],
         [

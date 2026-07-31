@@ -49,6 +49,14 @@ def validate_secure_path(value: str) -> str:
     return value
 
 
+def validate_img_url(value: str) -> str:
+    """公告配图地址。v2board 侧规则是 nullable|url,空值由调用方决定是否发送。"""
+    value = value.strip()
+    if not _URL_PATTERN.match(value):
+        raise V2BoardAPIError("图片地址必须是 http:// 或 https:// 开头的 URL")
+    return value
+
+
 def validate_email(value: str) -> str:
     value = value.strip()
     if not _EMAIL_PATTERN.match(value):
@@ -94,6 +102,13 @@ def v2node_to_db_row(node: dict[str, Any]) -> dict[str, Any]:
         "available_status": _opt_int(node.get("available_status")),
         "raw_json": json.dumps(node, ensure_ascii=False, default=str),
     }
+
+
+# ---------- 公告 ----------
+
+# get_notice 按 id 翻页查找时的步长与页数上限(最多扫 200 条)
+NOTICE_SCAN_PAGE_SIZE = 50
+NOTICE_SCAN_MAX_PAGES = 4
 
 
 # ---------- 客户端 ----------
@@ -323,6 +338,93 @@ class V2BoardClient:
             body["id"] = node_id
         await self._request_admin(
             panel, "POST", "server/v2node/save", json_body=body
+        )
+
+    # ---------- 公告 ----------
+
+    async def get_notices(
+        self,
+        panel: Panel,
+        *,
+        current: int = 1,
+        page_size: int = 10,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """拉公告列表,返回 (当页公告, 总条数)。
+
+        新版 v2board 的 notice/fetch 认 current / page_size 并回 total;
+        老版本忽略分页参数、一次性返回全量数组。两种都兼容:响应里没有
+        total 就按本地切片,total 取数组长度。
+        """
+        payload = await self._request_admin(
+            panel,
+            "GET",
+            "notice/fetch",
+            params={"current": current, "page_size": page_size},
+        )
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise V2BoardAPIError("notice/fetch 响应缺少 data 数组")
+        items = [n for n in data if isinstance(n, dict)]
+
+        total = _opt_int(payload.get("total"))
+        if total is not None:
+            return items, total
+        start = (current - 1) * page_size
+        return items[start : start + page_size], len(items)
+
+    async def get_notice(
+        self, panel: Panel, notice_id: int
+    ) -> dict[str, Any] | None:
+        """按 id 取单条公告。面板没有「取单条」的接口,只能翻页找。
+
+        公告量级通常在个位数,首页就能命中;拿到 total 后即可判断是否还有下一页。
+        """
+        page = 1
+        while page <= NOTICE_SCAN_MAX_PAGES:
+            items, total = await self.get_notices(
+                panel, current=page, page_size=NOTICE_SCAN_PAGE_SIZE
+            )
+            for item in items:
+                if _opt_int(item.get("id")) == notice_id:
+                    return item
+            if not items or page * NOTICE_SCAN_PAGE_SIZE >= total:
+                return None
+            page += 1
+        return None
+
+    async def save_notice(
+        self,
+        panel: Panel,
+        payload: dict[str, Any],
+        *,
+        notice_id: int | None = None,
+    ) -> None:
+        """创建或更新公告。传 notice_id 视为更新,省略则新建。
+
+        v2board 的 notice/save 只接受 title / content / img_url / tags,
+        不含 show,所以编辑不会动公告的发布状态。
+        """
+        body = dict(payload)
+        if notice_id is not None:
+            body["id"] = notice_id
+        await self._request_admin(
+            panel, "POST", "notice/save", json_body=body
+        )
+
+    async def toggle_notice_show(self, panel: Panel, notice_id: int) -> None:
+        """翻转公告的发布状态。
+
+        v2board 的 notice/show 不接受目标值,只按当前值取反,所以调用方
+        不能假定结果,应重新拉一次公告确认。
+        """
+        await self._request_admin(
+            panel, "POST", "notice/show", json_body={"id": notice_id}
+        )
+
+    async def drop_notice(self, panel: Panel, notice_id: int) -> None:
+        """删除公告。"""
+        await self._request_admin(
+            panel, "POST", "notice/drop", json_body={"id": notice_id}
         )
 
     async def fetch_config(self, panel: Panel) -> dict[str, Any]:
