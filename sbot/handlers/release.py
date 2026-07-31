@@ -1,8 +1,12 @@
 """安装包分发:从 GitHub Release 下载构建产物并上传到阿里云 OSS。
 
 主菜单 → 📦 安装包分发 → 仓库列表 → 选仓库 → 选版本 → 确认后执行:
-逐个 asset 下载到本地临时目录 → PutObject 到 <prefix>/<tag>/<文件名>
-(public-read)→ 服务端复制刷新 <prefix>/latest/ → 回复分发链接。
+逐个 asset 下载到本地临时目录 → 算 sha256 → PutObject 到
+<prefix>/<tag>/<文件名>(public-read)→ 服务端复制刷新 <prefix>/latest/ →
+回复分发链接。
+
+发布结果(版本号、各平台链接、sha256、体积)会存进 user_data,供
+release_sync.py 一键同步到远程配置 JSON。
 
 OSS 凭据来自 .env(OSS_REGION / OSS_BUCKET / OSS_ACCESS_KEY_ID /
 OSS_ACCESS_KEY_SECRET),未配置时提示功能未启用。
@@ -18,8 +22,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
 from ..db import crud
+from ..services import release_manifest
 from ..services.github_release import GitHubAPIError
 from ..services.oss_api import OSSAPIError
+from ..services.release_manifest import ManifestAsset
 from .common import (
     CB_BACK_REL_LIST,
     CB_DEL_REL_SRC,
@@ -30,6 +36,7 @@ from .common import (
     CB_REL_NONE,
     CB_REL_PICK,
     CB_REL_SRC,
+    CB_REL_SYNC,
     CB_REL_TOGGLE,
     CB_REL_VER,
     get_ctx,
@@ -44,6 +51,11 @@ log = logging.getLogger(__name__)
 # Release 列表缓存键(callback_data 放不下 tag,存 user_data 用索引引用)
 RELEASES_KEY = "rel_releases"
 MAX_RELEASES = 10
+
+# 最近一次发布结果,release_sync.py 读它来同步远程配置。
+# 每次发布递增 serial 并写进按钮的 callback_data:旧消息上的按钮点了会
+# 被认出是过期的,不会把新版本的信息错当成它自己的。
+PUBLISH_KEY = "rel_publish"
 
 
 async def _reply_or_edit(update: Update, text: str, reply_markup=None) -> None:
@@ -408,6 +420,8 @@ async def cb_publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     assets = [rel["assets"][i] for i in sorted(selected)]
     n = len(assets)
     uploaded: list[tuple[str, str]] = []  # (文件名, 版本 key)
+    manifest: list[ManifestAsset] = []  # 能识别平台/架构的,供同步远程配置
+    unknown: list[str] = []  # 认不出平台/架构的文件名
     tmpdir = tempfile.mkdtemp(prefix="sbot-release-")
     try:
         for i, asset in enumerate(assets):
@@ -415,12 +429,26 @@ async def cb_publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             label = f"({i + 1}/{n}) {name}({human_size(asset['size'])})"
             path = os.path.join(tmpdir, name)
             await query.edit_message_text(f"⏳ {label} 从 GitHub 下载中…")
-            await ctx.github.download_asset(source, asset["id"], path)
+            size = await ctx.github.download_asset(source, asset["id"], path)
+            # 校验值按实际落盘的文件算,不用 GitHub 报的 size
+            digest = await release_manifest.sha256_file(path)
             await query.edit_message_text(f"⏳ {label} 上传 OSS 中…")
             key = f"{prefix}/{tag}/{name}"
             await oss.put_object_file(key, path)
             os.remove(path)  # 及时释放磁盘,大包场景重要
             uploaded.append((name, key))
+            slot = release_manifest.classify(name)
+            if slot is None:
+                unknown.append(name)
+            else:
+                manifest.append(ManifestAsset(
+                    name=name,
+                    platform=slot[0],
+                    arch=slot[1],
+                    url=oss.public_url(key),
+                    sha256=digest,
+                    size=size,
+                ))
 
         # 刷新 latest/:仅把本次上传的文件复制过去(覆盖同名)。
         # 因为是按需选择上传,不删除 latest/ 里其它已存在的文件。
@@ -442,6 +470,16 @@ async def cb_publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
+    previous = context.user_data.get(PUBLISH_KEY) or {}
+    serial = int(previous.get("serial") or 0) + 1
+    context.user_data[PUBLISH_KEY] = {
+        "serial": serial,
+        "repo": source.repo,
+        "tag": tag,
+        "dir_url": oss.public_url(f"{prefix}/{tag}/"),
+        "assets": manifest,
+    }
+
     lines = [f"✅ {tag} 发布完成,共 {n} 个文件。\n"]
     lines.append("固定链接(始终指向最新版本):")
     lines += [
@@ -453,8 +491,26 @@ async def cb_publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if copy_errors:
         lines.append("\n⚠️ latest 刷新部分失败:")
         lines += copy_errors
+
+    missing = release_manifest.missing_slots(manifest)
+    kb = None
+    if missing:
+        lines.append(
+            "\n⚠️ 不能同步远程配置,缺少:"
+            + "、".join(release_manifest.slot_label(s) for s in missing)
+            + "(四个包齐全才允许同步)"
+        )
+    else:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+            "🔗 同步远程配置", callback_data=f"{CB_REL_SYNC}{serial}",
+        )]])
+    if unknown:
+        lines.append("(未识别平台/架构,不参与同步:" + "、".join(unknown) + ")")
+
     await query.edit_message_text(
-        truncate("\n".join(lines)), disable_web_page_preview=True,
+        truncate("\n".join(lines)),
+        reply_markup=kb,
+        disable_web_page_preview=True,
     )
     await _log_action(
         update,

@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 
 import pytest
 
+from sbot.core.timeutil import utcnow
 from sbot.db import crud
 from sbot.handlers import panel_node as pn
 from sbot.handlers.common import CB_PANEL_NODES
@@ -44,7 +44,7 @@ def fake_db(monkeypatch):
     monkeypatch.setattr(crud, "session", session)
     monkeypatch.setattr(crud, "get_panel", lambda s, pid: coro(FakePanel()))
     monkeypatch.setattr(crud, "list_panel_nodes", lambda s, pid: coro(state["nodes"]))
-    monkeypatch.setattr(crud, "latest_node_sync_at", lambda s, pid: coro(datetime.utcnow()))
+    monkeypatch.setattr(crud, "latest_node_sync_at", lambda s, pid: coro(utcnow()))
     return state
 
 
