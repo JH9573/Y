@@ -231,9 +231,11 @@ class OssConfig(Base):
 
 
 class CosConfig(Base):
-    """腾讯云 COS 配置(单行表,取第一条生效)。
+    """腾讯云 COS 配置(可存多个存储桶,is_active 标记当前使用的那个)。
 
-    远程配置(JSON 文件)功能使用。通过 bot 交互录入。
+    远程配置(JSON 文件)功能使用,读写都走当前使用的桶。通过 bot 交互录入。
+    (region, bucket) 视为同一配置,重复录入按更新处理(应用层保证,同
+    OssConfig 不设表约束)。
     secret_key 加密存储;secret_id 明文,展示时打码。
     bucket 需带 APPID 后缀(如 mycfg-1250000000)。
     """
@@ -245,6 +247,7 @@ class CosConfig(Base):
     bucket: Mapped[str] = mapped_column(String(64), nullable=False)
     secret_id: Mapped[str] = mapped_column(String(128), nullable=False)
     secret_key: Mapped[str] = mapped_column(Text, nullable=False)  # 加密存储
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.current_timestamp()
     )

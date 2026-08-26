@@ -63,7 +63,7 @@ async def init_db(db_url: str) -> None:
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_columns(conn)
-        await _fixup_oss_active(conn)
+        await _fixup_active_buckets(conn)
 
 
 # 建表之后补加的列。create_all 只建新表、不会 ALTER 已存在的表,所以每次给
@@ -80,6 +80,9 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "host_key": "TEXT",
     },
     "oss_config": {
+        "is_active": "BOOLEAN NOT NULL DEFAULT 0",
+    },
+    "cos_config": {
         "is_active": "BOOLEAN NOT NULL DEFAULT 0",
     },
 }
@@ -101,14 +104,15 @@ async def _ensure_columns(conn) -> None:
             log.info("已为老库补列: %s.%s %s", table, name, ddl)
 
 
-async def _fixup_oss_active(conn) -> None:
-    """oss_config 多桶化前的老库只有一行且没有 is_active 标记,
+async def _fixup_active_buckets(conn) -> None:
+    """oss_config / cos_config 多桶化前的老库只有一行且没有 is_active 标记,
     把最早一行标为当前使用,保证「有配置就恰有一个活动桶」的不变式。idempotent。"""
-    await conn.exec_driver_sql(
-        "UPDATE oss_config SET is_active = 1 "
-        "WHERE id = (SELECT MIN(id) FROM oss_config) "
-        "AND NOT EXISTS (SELECT 1 FROM oss_config WHERE is_active = 1)"
-    )
+    for table in ("oss_config", "cos_config"):
+        await conn.exec_driver_sql(
+            f"UPDATE {table} SET is_active = 1 "
+            f"WHERE id = (SELECT MIN(id) FROM {table}) "
+            f"AND NOT EXISTS (SELECT 1 FROM {table} WHERE is_active = 1)"
+        )
 
 
 def session() -> AsyncSession:
@@ -656,10 +660,25 @@ async def delete_oss_config(s: AsyncSession, config_id: int) -> OssConfig | None
 
 
 # ---------- cos config ----------
+# 与 oss config 同一套多桶约定:只要有配置行,就恰有一行 is_active=1,
+# 远程配置的读写都走这一行。
 
-async def get_cos_config(s: AsyncSession) -> CosConfig | None:
-    """单行配置,取第一条。"""
-    result = await s.execute(select(CosConfig).order_by(CosConfig.id).limit(1))
+async def list_cos_configs(s: AsyncSession) -> list[CosConfig]:
+    result = await s.execute(select(CosConfig).order_by(CosConfig.id))
+    return list(result.scalars().all())
+
+
+async def get_cos_config(s: AsyncSession, config_id: int) -> CosConfig | None:
+    return await s.get(CosConfig, config_id)
+
+
+async def get_active_cos_config(s: AsyncSession) -> CosConfig | None:
+    """当前使用的配置。不变式意外破坏时退回最早一行,不至于功能失灵。"""
+    result = await s.execute(
+        select(CosConfig)
+        .order_by(CosConfig.is_active.desc(), CosConfig.id)
+        .limit(1)
+    )
     return result.scalar_one_or_none()
 
 
@@ -671,9 +690,18 @@ async def upsert_cos_config(
     secret_id: str,
     secret_key: str,
 ) -> CosConfig:
-    config = await get_cos_config(s)
+    """按 (region, bucket) 更新或新增;首个配置自动设为当前使用。"""
+    result = await s.execute(
+        select(CosConfig)
+        .where(CosConfig.region == region, CosConfig.bucket == bucket)
+        .order_by(CosConfig.id)
+    )
+    config = result.scalars().first()
     if config is None:
-        config = CosConfig()
+        total = (
+            await s.execute(select(func.count()).select_from(CosConfig))
+        ).scalar_one()
+        config = CosConfig(is_active=total == 0)
         s.add(config)
     config.region = region
     config.bucket = bucket
@@ -683,10 +711,37 @@ async def upsert_cos_config(
     return config
 
 
-async def delete_cos_config(s: AsyncSession) -> None:
-    config = await get_cos_config(s)
-    if config is not None:
-        await s.delete(config)
+async def set_active_cos_config(s: AsyncSession, config_id: int) -> CosConfig | None:
+    config = await s.get(CosConfig, config_id)
+    if config is None:
+        return None
+    await s.execute(
+        update(CosConfig)
+        .where(CosConfig.id != config_id, CosConfig.is_active)
+        .values(is_active=False)
+    )
+    config.is_active = True
+    await s.flush()
+    return config
+
+
+async def delete_cos_config(s: AsyncSession, config_id: int) -> CosConfig | None:
+    """删除一个存储桶配置;删的是活动桶时把剩下最早的一个顶上。返回被删的行。"""
+    config = await s.get(CosConfig, config_id)
+    if config is None:
+        return None
+    was_active = config.is_active
+    await s.delete(config)
+    await s.flush()
+    if was_active:
+        result = await s.execute(
+            select(CosConfig).order_by(CosConfig.id).limit(1)
+        )
+        successor = result.scalars().first()
+        if successor is not None:
+            successor.is_active = True
+            await s.flush()
+    return config
 
 
 # ---------- remote config files ----------
