@@ -201,9 +201,11 @@ class ReleaseSource(Base):
 
 
 class OssConfig(Base):
-    """阿里云 OSS 分发配置(单行表,取第一条生效)。
+    """阿里云 OSS 分发配置(可存多个存储桶,is_active 标记当前发布使用的那个)。
 
     通过 bot 交互录入,优先于 .env 中的 OSS_* 配置。
+    (region, bucket) 视为同一配置,重复录入按更新处理(应用层保证,不设表约束,
+    老库 ALTER 补不了约束)。
     access_key_secret 加密存储;access_key_id 明文,展示时打码。
     """
 
@@ -216,6 +218,7 @@ class OssConfig(Base):
     access_key_secret: Mapped[str] = mapped_column(Text, nullable=False)  # 加密存储
     public_base_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     prefix: Mapped[str] = mapped_column(String(64), nullable=False, default="releases")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.current_timestamp()
     )

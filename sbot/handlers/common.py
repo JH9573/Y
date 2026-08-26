@@ -150,12 +150,14 @@ CB_RCFG_REPLACE = "rcfp:"     # rcfp:<id> -> 替换整个文件对话入口
 CB_RCFG_ADD_FORCE = "rcfaf"   # 文件不存在时确认创建
 CB_RCFG_ADD_DROP = "rcfad"    # 文件不存在时放弃添加
 
-CB_MENU_OSS_CFG = "mosscfg"   # 查看 OSS 配置
-CB_OSS_EDIT = "osse"          # 进入 OSS 配置录入对话
+CB_MENU_OSS_CFG = "mosscfg"   # OSS 存储桶列表
+CB_OSS_EDIT = "osse"          # 进入 OSS 配置录入对话(添加/更新存储桶)
 CB_OSS_SAVE = "osssave"       # 校验失败后仍要保存
 CB_OSS_DROP = "ossdrop"       # 校验失败后放弃保存
-CB_OSS_CLEAR = "ossclr"       # 清除数据库中的 OSS 配置(回退 .env)
-CB_OSS_CLEAR_OK = "ossclrok"  # 清除二次确认
+CB_OSS_DETAIL = "ossd:"       # ossd:<id> -> 存储桶详情
+CB_OSS_ACTIVE = "ossact:"     # ossact:<id> -> 设为当前发布使用的存储桶
+CB_OSS_DEL = "ossdel:"        # ossdel:<id> -> 删除确认
+CB_OSS_DEL_OK = "ossdelok:"   # ossdelok:<id> -> 真正删除(回退下一个/`.env`)
 
 # 更新重启
 CB_UPDATE_CONFIRM = "updok"   # 二次确认后:更新当前分支并重启

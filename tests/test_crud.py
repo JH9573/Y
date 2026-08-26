@@ -209,6 +209,117 @@ async def test_update_server_can_clear_passphrase(db):
         assert got.credential == "/k2" and got.key_passphrase is None
 
 
+# ---------- OSS 多存储桶 ----------
+
+async def _oss(s, bucket="b1", region="ap-southeast-1", ak="AKID"):
+    return await crud.upsert_oss_config(
+        s, region=region, bucket=bucket, access_key_id=ak,
+        access_key_secret="enc", public_base_url=None, prefix="releases",
+    )
+
+
+async def test_oss_first_config_becomes_active(db):
+    async with crud.session() as s:
+        first = await _oss(s)
+        await s.commit()
+        assert first.is_active
+        active = await crud.get_active_oss_config(s)
+        assert active is not None and active.id == first.id
+
+
+async def test_oss_second_config_stays_backup(db):
+    async with crud.session() as s:
+        first = await _oss(s, bucket="b1")
+        second = await _oss(s, bucket="b2")
+        await s.commit()
+        assert not second.is_active
+        assert [c.id for c in await crud.list_oss_configs(s)] == [first.id, second.id]
+        assert (await crud.get_active_oss_config(s)).id == first.id
+
+
+async def test_oss_upsert_same_region_bucket_updates_in_place(db):
+    async with crud.session() as s:
+        first = await _oss(s, bucket="b1")
+        await _oss(s, bucket="b2")
+        again = await _oss(s, bucket="b1", ak="AKID-NEW")
+        await s.commit()
+        assert again.id == first.id            # 没有新增行
+        assert again.access_key_id == "AKID-NEW"
+        assert again.is_active                 # 活动标记不因更新丢失
+        assert len(await crud.list_oss_configs(s)) == 2
+
+
+async def test_oss_set_active_switches(db):
+    async with crud.session() as s:
+        first = await _oss(s, bucket="b1")
+        second = await _oss(s, bucket="b2")
+        await s.commit()
+        assert await crud.set_active_oss_config(s, second.id) is not None
+        await s.commit()
+        configs = {c.id: c.is_active for c in await crud.list_oss_configs(s)}
+        assert configs == {first.id: False, second.id: True}
+        assert (await crud.get_active_oss_config(s)).id == second.id
+        assert await crud.set_active_oss_config(s, 9999) is None
+
+
+async def test_oss_delete_active_promotes_next(db):
+    async with crud.session() as s:
+        first = await _oss(s, bucket="b1")
+        second = await _oss(s, bucket="b2")
+        await s.commit()
+        deleted = await crud.delete_oss_config(s, first.id)
+        await s.commit()
+        assert deleted is not None and deleted.bucket == "b1"
+        active = await crud.get_active_oss_config(s)
+        assert active is not None and active.id == second.id and active.is_active
+        assert await crud.delete_oss_config(s, first.id) is None  # 已删过
+        await crud.delete_oss_config(s, second.id)
+        await s.commit()
+        assert await crud.get_active_oss_config(s) is None
+
+
+async def test_oss_delete_backup_keeps_active(db):
+    async with crud.session() as s:
+        first = await _oss(s, bucket="b1")
+        second = await _oss(s, bucket="b2")
+        await s.commit()
+        await crud.delete_oss_config(s, second.id)
+        await s.commit()
+        active = await crud.get_active_oss_config(s)
+        assert active is not None and active.id == first.id and active.is_active
+
+
+async def test_old_oss_config_gets_active_flag(tmp_path):
+    """真实场景:多桶化之前的老库只有一行配置、没有 is_active 列。"""
+    import aiosqlite
+
+    path = tmp_path / "old.db"
+    async with aiosqlite.connect(path) as conn:
+        await conn.execute(
+            "CREATE TABLE oss_config ("
+            " id INTEGER PRIMARY KEY, region VARCHAR(32), bucket VARCHAR(64),"
+            " access_key_id VARCHAR(128), access_key_secret TEXT,"
+            " public_base_url VARCHAR(255), prefix VARCHAR(64),"
+            " created_at DATETIME, updated_at DATETIME)"
+        )
+        await conn.execute(
+            "INSERT INTO oss_config (region, bucket, access_key_id,"
+            " access_key_secret, prefix) VALUES"
+            " ('cn-hongkong', 'old-bucket', 'AK', 'enc', 'releases')"
+        )
+        await conn.commit()
+
+    await crud.init_db(f"sqlite+aiosqlite:///{path}")
+    try:
+        async with crud.session() as s:
+            active = await crud.get_active_oss_config(s)
+            assert active is not None
+            assert active.bucket == "old-bucket" and active.is_active
+    finally:
+        await crud._engine.dispose()
+        crud._engine = crud._session_factory = None
+
+
 # ---------- 操作日志 ----------
 
 async def test_log_pagination_and_filter(db):
