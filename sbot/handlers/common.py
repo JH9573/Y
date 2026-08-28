@@ -135,12 +135,14 @@ CB_RSYNC_NO = "rsyn"          # 预览页放弃同步
 # 远程配置(腾讯云 COS 上的 JSON 文件)
 CB_MENU_RCFG_LIST = "mrcls"   # 进入远程配置文件列表
 CB_MENU_RCFG_ADD = "mrcad"    # 进入添加远程配置文件对话
-CB_MENU_COS_CFG = "mcoscfg"   # 查看 COS 配置
-CB_COS_EDIT = "cose"          # 进入 COS 配置录入对话
+CB_MENU_COS_CFG = "mcoscfg"   # COS 存储桶列表
+CB_COS_EDIT = "cose"          # 进入 COS 配置录入对话(添加/更新存储桶)
 CB_COS_SAVE = "cossave"       # 校验失败后仍要保存
 CB_COS_DROP = "cosdrop"       # 校验失败后放弃保存
-CB_COS_CLEAR = "cosclr"       # 清除 COS 配置
-CB_COS_CLEAR_OK = "cosclrok"  # 清除二次确认
+CB_COS_DETAIL = "cosdt:"      # cosdt:<id> -> 存储桶详情
+CB_COS_ACTIVE = "cosact:"     # cosact:<id> -> 设为当前使用的存储桶
+CB_COS_DEL = "cosdel:"        # cosdel:<id> -> 删除确认
+CB_COS_DEL_OK = "cosdelok:"   # cosdelok:<id> -> 真正删除(活动桶被删则顶替下一个)
 CB_RCFG_FILE = "rcf:"         # rcf:<id> -> 文件详情(拉取并展示内容)
 CB_BACK_RCFG_LIST = "back:rcfg"  # 返回文件列表
 CB_RCFG_DEL = "rcfd:"         # rcfd:<id> -> 移除文件确认(仅移出列表)
@@ -150,12 +152,14 @@ CB_RCFG_REPLACE = "rcfp:"     # rcfp:<id> -> 替换整个文件对话入口
 CB_RCFG_ADD_FORCE = "rcfaf"   # 文件不存在时确认创建
 CB_RCFG_ADD_DROP = "rcfad"    # 文件不存在时放弃添加
 
-CB_MENU_OSS_CFG = "mosscfg"   # 查看 OSS 配置
-CB_OSS_EDIT = "osse"          # 进入 OSS 配置录入对话
+CB_MENU_OSS_CFG = "mosscfg"   # OSS 存储桶列表
+CB_OSS_EDIT = "osse"          # 进入 OSS 配置录入对话(添加/更新存储桶)
 CB_OSS_SAVE = "osssave"       # 校验失败后仍要保存
 CB_OSS_DROP = "ossdrop"       # 校验失败后放弃保存
-CB_OSS_CLEAR = "ossclr"       # 清除数据库中的 OSS 配置(回退 .env)
-CB_OSS_CLEAR_OK = "ossclrok"  # 清除二次确认
+CB_OSS_DETAIL = "ossd:"       # ossd:<id> -> 存储桶详情
+CB_OSS_ACTIVE = "ossact:"     # ossact:<id> -> 设为当前发布使用的存储桶
+CB_OSS_DEL = "ossdel:"        # ossdel:<id> -> 删除确认
+CB_OSS_DEL_OK = "ossdelok:"   # ossdelok:<id> -> 真正删除(回退下一个/`.env`)
 
 # 更新重启
 CB_UPDATE_CONFIRM = "updok"   # 二次确认后:更新当前分支并重启

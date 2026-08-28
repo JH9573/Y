@@ -94,7 +94,7 @@ async def show_file_list(
 ) -> None:
     async with crud.session() as s:
         files = await crud.list_remote_files(s)
-        cos_row = await crud.get_cos_config(s)
+        cos_row = await crud.get_active_cos_config(s)
     if cos_row is None:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(
             "⚙️ 去配置 COS", callback_data=CB_MENU_COS_CFG,
@@ -110,7 +110,11 @@ async def show_file_list(
     rows.append([InlineKeyboardButton(
         "➕ 添加文件", callback_data=CB_MENU_RCFG_ADD,
     )])
-    text = "远程配置文件列表:" if files else "还没有登记远程配置文件。"
+    bucket = f"cos://{cos_row.bucket}"
+    text = (
+        f"远程配置文件列表({bucket}):" if files
+        else f"还没有登记远程配置文件。(当前存储桶: {bucket})"
+    )
     await _reply_or_edit(update, text, reply_markup=InlineKeyboardMarkup(rows))
 
 

@@ -59,6 +59,10 @@ class COSClient:
         self._secret_key = secret_key
         self._host = f"{bucket}.cos.{region}.myqcloud.com"
 
+    @property
+    def bucket(self) -> str:
+        return self._bucket
+
     # ---------- 签名 ----------
 
     def _authorization(

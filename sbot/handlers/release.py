@@ -8,8 +8,8 @@
 发布结果(版本号、各平台链接、sha256、体积)会存进 user_data,供
 release_sync.py 一键同步到远程配置 JSON。
 
-OSS 凭据来自 .env(OSS_REGION / OSS_BUCKET / OSS_ACCESS_KEY_ID /
-OSS_ACCESS_KEY_SECRET),未配置时提示功能未启用。
+OSS 凭据经 oss_config.load_oss 解析:bot 内录入的存储桶(多个时取
+✅ 当前使用的那个)优先,.env 的 OSS_* 兜底;未配置时提示功能未启用。
 """
 from __future__ import annotations
 

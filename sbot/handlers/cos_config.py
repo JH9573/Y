@@ -1,7 +1,10 @@
-"""腾讯云 COS 配置:查看、交互录入、清除。
+"""腾讯云 COS 配置:存储桶列表、交互录入、切换与删除。
 
 主菜单 → 🛠 远程配置 → ⚙️ COS 配置
 
+可录入多个存储桶,✅ 标记的那个是远程配置读写实际使用的(「当前使用」);
+其余为备用,在详情页可一键切换。(region, bucket) 相同视为同一配置,
+重复录入即更新凭据。
 录入流程: region → bucket(带 APPID 后缀)→ SecretId → SecretKey →
 实测 COS 访问 → 入库。凭据消息收到即从聊天删除,SecretKey 加密存储。
 """
@@ -26,8 +29,10 @@ from ..db import crud
 from ..services.cos_api import COSAPIError, COSClient
 from .common import (
     ANY_MENU_TEXT_FILTER,
-    CB_COS_CLEAR,
-    CB_COS_CLEAR_OK,
+    CB_COS_ACTIVE,
+    CB_COS_DEL,
+    CB_COS_DEL_OK,
+    CB_COS_DETAIL,
     CB_COS_DROP,
     CB_COS_EDIT,
     CB_COS_SAVE,
@@ -54,9 +59,9 @@ _BUCKET_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*-[0-9]{6,}$")
 # ---------- 配置加载(供 remote_config 等复用) ----------
 
 async def load_cos(ctx: AppContext) -> COSClient | None:
-    """从数据库构建 COS 客户端;未配置返回 None。"""
+    """从数据库构建 COS 客户端(多桶时用当前使用的那个);未配置返回 None。"""
     async with crud.session() as s:
-        row = await crud.get_cos_config(s)
+        row = await crud.get_active_cos_config(s)
     if row is None:
         return None
     try:
@@ -71,59 +76,158 @@ async def load_cos(ctx: AppContext) -> COSClient | None:
     )
 
 
-# ---------- 查看 / 清除 ----------
+# ---------- 存储桶列表 / 详情 / 切换 / 删除 ----------
+
+async def _render_bucket_list(query) -> None:
+    async with crud.session() as s:
+        configs = await crud.list_cos_configs(s)
+
+    add_row = [InlineKeyboardButton("➕ 添加存储桶", callback_data=CB_COS_EDIT)]
+    if configs:
+        rows = [
+            [InlineKeyboardButton(
+                f"{'✅ ' if c.is_active else ''}{c.bucket} @ {c.region}",
+                callback_data=f"{CB_COS_DETAIL}{c.id}",
+            )]
+            for c in configs
+        ]
+        rows.append(add_row)
+        text = (
+            f"⚙️ COS 配置(共 {len(configs)} 个存储桶)\n"
+            "✅ 为远程配置当前使用的存储桶;点击查看详情、切换或删除。"
+        )
+    else:
+        rows = [add_row]
+        text = "⚙️ COS 尚未配置,远程配置功能不可用。点下方按钮添加存储桶。"
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
+
 
 async def show_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    async with crud.session() as s:
-        row = await crud.get_cos_config(s)
-
-    rows = [[InlineKeyboardButton("✏️ 修改配置", callback_data=CB_COS_EDIT)]]
-    if row is not None:
-        text = (
-            "⚙️ COS 配置\n"
-            f"区域: {row.region}\n"
-            f"Bucket: {row.bucket}\n"
-            f"SecretId: {mask_secret(row.secret_id)}"
-        )
-        rows.append([InlineKeyboardButton(
-            "🗑 清除配置", callback_data=CB_COS_CLEAR,
-        )])
-    else:
-        text = "⚙️ COS 尚未配置,远程配置功能不可用。点下方按钮开始录入。"
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
+    await _render_bucket_list(query)
 
 
-async def cb_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def _back_to_list_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("« 返回列表", callback_data=CB_MENU_COS_CFG),
+    ]])
+
+
+def _config_id_from(data: str) -> int:
+    return int(data.split(":", 1)[1])
+
+
+async def cb_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("确认清除", callback_data=CB_COS_CLEAR_OK),
-        InlineKeyboardButton("取消", callback_data=CB_MENU_COS_CFG),
-    ]])
+    config_id = _config_id_from(query.data)
+    async with crud.session() as s:
+        config = await crud.get_cos_config(s, config_id)
+    if config is None:
+        await query.edit_message_text(
+            "该存储桶配置不存在,可能已被删除。", reply_markup=_back_to_list_kb(),
+        )
+        return
+    rows = []
+    if not config.is_active:
+        rows.append([InlineKeyboardButton(
+            "⭐ 设为当前使用", callback_data=f"{CB_COS_ACTIVE}{config.id}",
+        )])
+    rows.append([
+        InlineKeyboardButton("🗑 删除", callback_data=f"{CB_COS_DEL}{config.id}"),
+        InlineKeyboardButton("« 返回列表", callback_data=CB_MENU_COS_CFG),
+    ])
     await query.edit_message_text(
-        "⚠️ 将删除 COS 配置,远程配置功能将不可用(不影响 COS 上的文件),"
-        "确认清除?",
-        reply_markup=kb,
+        f"📦 存储桶: {config.bucket}\n"
+        f"状态: {'✅ 当前使用(远程配置读写走这个桶)' if config.is_active else '备用'}\n"
+        f"区域: {config.region}\n"
+        f"SecretId: {mask_secret(config.secret_id)}",
+        reply_markup=InlineKeyboardMarkup(rows),
     )
 
 
-async def cb_clear_ok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cb_set_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
+    config_id = _config_id_from(query.data)
     async with crud.session() as s:
-        await crud.delete_cos_config(s)
+        config = await crud.set_active_cos_config(s, config_id)
+        if config is None:
+            await query.edit_message_text(
+                "该存储桶配置不存在,可能已被删除。",
+                reply_markup=_back_to_list_kb(),
+            )
+            return
         await crud.add_log(
             s,
             user_id=update.effective_user.id,
             server_id=None,
-            action="cos.config.clear",
+            action="cos.config.activate",
             result="success",
-            detail=None,
+            detail=f"region={config.region}, bucket={config.bucket}",
         )
         await s.commit()
-    await query.edit_message_text("✅ 已清除 COS 配置。")
+    await _render_bucket_list(query)
+
+
+async def cb_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    config_id = _config_id_from(query.data)
+    async with crud.session() as s:
+        config = await crud.get_cos_config(s, config_id)
+        others = (
+            len(await crud.list_cos_configs(s)) - 1 if config is not None else 0
+        )
+    if config is None:
+        await query.edit_message_text(
+            "该存储桶配置不存在,可能已被删除。", reply_markup=_back_to_list_kb(),
+        )
+        return
+    if config.is_active and others:
+        note = "它是当前使用的存储桶,删除后将自动启用另一个。"
+    elif others:
+        note = ""
+    else:
+        note = "删除后远程配置功能不可用。"
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "确认删除", callback_data=f"{CB_COS_DEL_OK}{config.id}",
+        ),
+        InlineKeyboardButton(
+            "取消", callback_data=f"{CB_COS_DETAIL}{config.id}",
+        ),
+    ]])
+    await query.edit_message_text(
+        f"⚠️ 将删除存储桶「{config.bucket} @ {config.region}」的配置"
+        f"(不影响 COS 上的文件)。{note}确认删除?",
+        reply_markup=kb,
+    )
+
+
+async def cb_del_ok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    config_id = _config_id_from(query.data)
+    async with crud.session() as s:
+        config = await crud.delete_cos_config(s, config_id)
+        if config is None:
+            await query.edit_message_text(
+                "该存储桶配置不存在,可能已被删除。",
+                reply_markup=_back_to_list_kb(),
+            )
+            return
+        await crud.add_log(
+            s,
+            user_id=update.effective_user.id,
+            server_id=None,
+            action="cos.config.del",
+            result="success",
+            detail=f"region={config.region}, bucket={config.bucket}",
+        )
+        await s.commit()
+    await _render_bucket_list(query)
 
 
 # ---------- 录入对话 ----------
@@ -133,7 +237,8 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.callback_query.answer()
     context.user_data[KEY] = {}
     await update.effective_message.reply_text(
-        "开始录入腾讯云 COS 配置。任意时候可点「❌ 取消」或发 /cancel 中止。\n\n"
+        "开始添加腾讯云 COS 存储桶(区域与 bucket 名都相同时视为更新)。"
+        "任意时候可点「❌ 取消」或发 /cancel 中止。\n\n"
         "请输入 bucket 所在区域 id(如新加坡 ap-singapore、"
         "香港 ap-hongkong):",
         reply_markup=cancel_only_kb(),
@@ -269,7 +374,7 @@ async def _save(
 ) -> int:
     data = context.user_data[KEY]
     async with crud.session() as s:
-        await crud.upsert_cos_config(
+        config = await crud.upsert_cos_config(
             s,
             region=data["region"],
             bucket=data["bucket"],
@@ -289,11 +394,16 @@ async def _save(
         )
         await s.commit()
     note = "访问测试通过。" if verified else "未通过访问测试,已按要求强行保存。"
+    active_note = (
+        "当前远程配置使用的存储桶。" if config.is_active
+        else "备用存储桶,远程配置仍走 ✅ 标记的那个,可在「COS 配置」列表中切换。"
+    )
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=(
             f"✅ COS 配置已保存({note})\n"
-            f"bucket: {data['bucket']} @ {data['region']}"
+            f"bucket: {data['bucket']} @ {data['region']}\n"
+            f"{active_note}"
         ),
         reply_markup=main_menu_kb(),
     )
@@ -337,8 +447,14 @@ def register(application, ctx) -> None:
         CallbackQueryHandler(show_config, pattern=f"^{CB_MENU_COS_CFG}$")
     )
     application.add_handler(
-        CallbackQueryHandler(cb_clear, pattern=f"^{CB_COS_CLEAR}$")
+        CallbackQueryHandler(cb_detail, pattern=rf"^{CB_COS_DETAIL}\d+$")
     )
     application.add_handler(
-        CallbackQueryHandler(cb_clear_ok, pattern=f"^{CB_COS_CLEAR_OK}$")
+        CallbackQueryHandler(cb_set_active, pattern=rf"^{CB_COS_ACTIVE}\d+$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(cb_del, pattern=rf"^{CB_COS_DEL}\d+$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(cb_del_ok, pattern=rf"^{CB_COS_DEL_OK}\d+$")
     )
